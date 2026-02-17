@@ -20,13 +20,14 @@ interface Agent {
 interface ConfigData {
   agents: Agent[];
   defaults: { model: string; fallbacks: string[] };
-  gateway?: { port: number };
+  gateway?: { port: number; token?: string };
 }
 
 // 平台标签颜色（可点击跳转到 session）
-function PlatformBadge({ platform, agentId, gatewayPort }: { platform: Platform; agentId: string; gatewayPort: number }) {
+function PlatformBadge({ platform, agentId, gatewayPort, gatewayToken }: { platform: Platform; agentId: string; gatewayPort: number; gatewayToken?: string }) {
   const isFeishu = platform.name === "feishu";
-  const sessionUrl = `http://localhost:${gatewayPort}/sessions?agent=${agentId}`;
+  let sessionUrl = `http://localhost:${gatewayPort}/sessions?agent=${agentId}`;
+  if (gatewayToken) sessionUrl += `&token=${encodeURIComponent(gatewayToken)}`;
   return (
     <a
       href={sessionUrl}
@@ -71,7 +72,7 @@ function ModelBadge({ model }: { model: string }) {
 }
 
 // Agent 卡片
-function AgentCard({ agent, gatewayPort }: { agent: Agent; gatewayPort: number }) {
+function AgentCard({ agent, gatewayPort, gatewayToken }: { agent: Agent; gatewayPort: number; gatewayToken?: string }) {
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 hover:border-[var(--accent)] transition-colors">
       <div className="flex items-center gap-3 mb-3">
@@ -94,7 +95,7 @@ function AgentCard({ agent, gatewayPort }: { agent: Agent; gatewayPort: number }
           <span className="text-xs text-[var(--text-muted)] block mb-1">平台</span>
           <div className="flex flex-wrap gap-1">
             {agent.platforms.map((p, i) => (
-              <PlatformBadge key={i} platform={p} agentId={agent.id} gatewayPort={gatewayPort} />
+              <PlatformBadge key={i} platform={p} agentId={agent.id} gatewayPort={gatewayPort} gatewayToken={gatewayToken} />
             ))}
           </div>
         </div>
@@ -224,7 +225,7 @@ export default function Home() {
       {/* 卡片墙 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {data.agents.map((agent) => (
-          <AgentCard key={agent.id} agent={agent} gatewayPort={data.gateway?.port || 18789} />
+          <AgentCard key={agent.id} agent={agent} gatewayPort={data.gateway?.port || 18789} gatewayToken={data.gateway?.token} />
         ))}
       </div>
 

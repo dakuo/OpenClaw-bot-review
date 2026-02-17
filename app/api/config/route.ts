@@ -115,7 +115,7 @@ export async function GET() {
       agents,
       providers,
       defaults: { model: defaultModel, fallbacks },
-      gateway: { port: config.gateway?.port || 18789 },
+      gateway: { port: config.gateway?.port || 18789, token: config.gateway?.auth?.token || "" },
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
