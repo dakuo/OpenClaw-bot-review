@@ -9,6 +9,72 @@ const OPENCLAW_DIR = OPENCLAW_HOME;
 
 // 从配置的 allowFrom 读取用户 id，用于构建 session key
 
+// 读取 agent 的 session 状态（最近活跃时间、token 用量）
+interface SessionStatus {
+  lastActive: number | null;
+  totalTokens: number;
+  contextTokens: number;
+  sessionCount: number;
+}
+
+function getAgentSessionStatus(agentId: string): SessionStatus {
+  const result: SessionStatus = { lastActive: null, totalTokens: 0, contextTokens: 0, sessionCount: 0 };
+  try {
+    const sessionsPath = path.join(OPENCLAW_DIR, `agents/${agentId}/sessions/sessions.json`);
+    const raw = fs.readFileSync(sessionsPath, "utf-8");
+    const sessions = JSON.parse(raw);
+    for (const [, val] of Object.entries(sessions)) {
+      const s = val as any;
+      result.sessionCount++;
+      result.totalTokens += s.totalTokens || 0;
+      if (s.contextTokens && s.contextTokens > result.contextTokens) result.contextTokens = s.contextTokens;
+      const updatedAt = s.updatedAt || 0;
+      if (!result.lastActive || updatedAt > result.lastActive) result.lastActive = updatedAt;
+    }
+  } catch {}
+  return result;
+}
+
+// 读取所有 agent 的群聊信息
+interface GroupChat {
+  groupId: string;
+  agents: { id: string; emoji: string; name: string }[];
+  channel: string;
+}
+
+function getGroupChats(agentIds: string[], agentMap: Record<string, { emoji: string; name: string }>): GroupChat[] {
+  const groupAgents: Record<string, { agents: Set<string>; channel: string }> = {};
+  for (const agentId of agentIds) {
+    try {
+      const sessionsPath = path.join(OPENCLAW_DIR, `agents/${agentId}/sessions/sessions.json`);
+      const raw = fs.readFileSync(sessionsPath, "utf-8");
+      const sessions = JSON.parse(raw);
+      for (const key of Object.keys(sessions)) {
+        // 匹配群聊 session: agent:{id}:feishu:group:{groupId} 或 agent:{id}:discord:channel:{channelId}
+        const feishuGroup = key.match(/^agent:[^:]+:feishu:group:(.+)$/);
+        const discordGroup = key.match(/^agent:[^:]+:discord:channel:(.+)$/);
+        if (feishuGroup) {
+          const gid = `feishu:${feishuGroup[1]}`;
+          if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "feishu" };
+          groupAgents[gid].agents.add(agentId);
+        }
+        if (discordGroup) {
+          const gid = `discord:${discordGroup[1]}`;
+          if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "discord" };
+          groupAgents[gid].agents.add(agentId);
+        }
+      }
+    } catch {}
+  }
+  return Object.entries(groupAgents)
+    .filter(([, v]) => v.agents.size > 0)
+    .map(([groupId, v]) => ({
+      groupId,
+      channel: v.channel,
+      agents: Array.from(v.agents).map(id => ({ id, emoji: agentMap[id]?.emoji || "🤖", name: agentMap[id]?.name || id })),
+    }));
+}
+
 // 从 OpenClaw sessions 文件获取每个 agent 最近活跃的飞书 DM session 的用户 open_id
 function getFeishuUserOpenIds(agentIds: string[]): Record<string, string> {
   const map: Record<string, string> = {};
@@ -120,6 +186,19 @@ export async function GET() {
       return { id, name, emoji, model, platforms };
     }));
 
+    // 为每个 agent 添加 session 状态
+    const agentsWithStatus = agents.map((agent: any) => ({
+      ...agent,
+      session: getAgentSessionStatus(agent.id),
+    }));
+
+    // 构建 agent 映射（用于群聊）
+    const agentMap: Record<string, { emoji: string; name: string }> = {};
+    for (const a of agentsWithStatus) agentMap[a.id] = { emoji: a.emoji, name: a.name };
+
+    // 获取群聊信息
+    const groupChats = getGroupChats(agentIds, agentMap);
+
     // 提取模型 providers
     const providers = Object.entries(config.models?.providers || {}).map(
       ([providerId, provider]: [string, any]) => {
@@ -133,7 +212,7 @@ export async function GET() {
         }));
 
         // 找出使用该 provider 的 agents
-        const usedBy = agents
+        const usedBy = agentsWithStatus
           .filter((a: any) => a.model.startsWith(providerId + "/"))
           .map((a: any) => ({ id: a.id, emoji: a.emoji }));
 
@@ -147,10 +226,11 @@ export async function GET() {
     );
 
     return NextResponse.json({
-      agents,
+      agents: agentsWithStatus,
       providers,
       defaults: { model: defaultModel, fallbacks },
       gateway: { port: config.gateway?.port || 18789, token: config.gateway?.auth?.token || "" },
+      groupChats,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

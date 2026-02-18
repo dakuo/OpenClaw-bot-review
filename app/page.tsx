@@ -17,12 +17,37 @@ interface Agent {
   emoji: string;
   model: string;
   platforms: Platform[];
+  session?: {
+    lastActive: number | null;
+    totalTokens: number;
+    contextTokens: number;
+    sessionCount: number;
+  };
+}
+
+interface GroupChat {
+  groupId: string;
+  channel: string;
+  agents: { id: string; emoji: string; name: string }[];
 }
 
 interface ConfigData {
   agents: Agent[];
   defaults: { model: string; fallbacks: string[] };
   gateway?: { port: number; token?: string };
+  groupChats?: GroupChat[];
+}
+
+// 时间格式化
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days} 天前`;
 }
 
 // 平台标签颜色（可点击跳转到对应平台的 session chat 页面）
@@ -128,6 +153,25 @@ function AgentCard({ agent, gatewayPort, gatewayToken }: { agent: Agent; gateway
             <code className="text-xs text-[var(--accent)] bg-[var(--bg)] px-2 py-0.5 rounded">
               {agent.platforms.find((p) => p.appId)?.appId}
             </code>
+          </div>
+        )}
+
+        {agent.session && (
+          <div className="pt-2 mt-2 border-t border-[var(--border)]">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-[var(--text-muted)]">会话数</span>
+              <span className="text-[var(--text)]">{agent.session.sessionCount}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs mt-1">
+              <span className="text-[var(--text-muted)]">Token 用量</span>
+              <span className="text-[var(--text)]">{(agent.session.totalTokens / 1000).toFixed(1)}k</span>
+            </div>
+            {agent.session.lastActive && (
+              <div className="flex items-center justify-between text-xs mt-1">
+                <span className="text-[var(--text-muted)]">最近活跃</span>
+                <span className="text-[var(--text)]">{formatTimeAgo(agent.session.lastActive)}</span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -250,6 +294,35 @@ export default function Home() {
           <AgentCard key={agent.id} agent={agent} gatewayPort={data.gateway?.port || 18789} gatewayToken={data.gateway?.token} />
         ))}
       </div>
+
+      {/* 群聊管理 */}
+      {data.groupChats && data.groupChats.length > 0 && (
+        <div className="mt-8 p-4 rounded-xl border border-[var(--border)] bg-[var(--card)]">
+          <h2 className="text-sm font-semibold text-[var(--text-muted)] mb-3">
+            💬 群聊拓扑
+          </h2>
+          <div className="space-y-3">
+            {data.groupChats.map((group, i) => (
+              <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]">
+                <span className="text-lg">{group.channel === "feishu" ? "📱" : "🎮"}</span>
+                <div className="flex-1">
+                  <div className="text-xs text-[var(--text-muted)] mb-1">
+                    {group.channel === "feishu" ? "飞书群" : "Discord 频道"} · {group.groupId.split(":")[1]}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {group.agents.map((a) => (
+                      <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-[var(--card)] border border-[var(--border)]">
+                        {a.emoji} {a.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <span className="text-xs text-[var(--text-muted)]">{group.agents.length} 个机器人</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Fallback 信息 */}
       {data.defaults.fallbacks.length > 0 && (
