@@ -257,7 +257,7 @@ function SessionList({ agentId }: { agentId: string }) {
           >
             {testingAll ? t("sessions.testingAll") : t("sessions.testAll")}
           </button>
-          <span className="text-xs text-[var(--text-muted)]">{t("sessions.testHint")}</span>
+          <span className="text-[var(--text-muted)] cursor-help" title={t("sessions.testHint")}>❓</span>
           <Link
             href="/sessions"
             className="px-4 py-2 rounded-lg bg-[var(--card)] border border-[var(--border)] text-sm hover:border-[var(--accent)] transition"
