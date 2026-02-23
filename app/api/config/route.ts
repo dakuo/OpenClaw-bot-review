@@ -66,14 +66,7 @@ function getGroupChats(agentIds: string[], agentMap: Record<string, { emoji: str
       }
     } catch {}
   }
-  // 所有绑定了飞书的 agent 都应该出现在已知的飞书群里
-  for (const [gid, v] of Object.entries(groupAgents)) {
-    if (v.channel === "feishu") {
-      for (const fid of feishuAgentIds) {
-        v.agents.add(fid);
-      }
-    }
-  }
+  // 返回每个群聊实际有 session 的 agents
   return Object.entries(groupAgents)
     .filter(([, v]) => v.agents.size > 0)
     .map(([groupId, v]) => ({
