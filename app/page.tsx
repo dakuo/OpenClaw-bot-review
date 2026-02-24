@@ -286,8 +286,6 @@ function MiniSparkline({ data, width = 120, height = 24 }: { data: number[]; wid
           <circle key={i} cx={p.x} cy={p.y} r={2} fill={color} opacity={0.9} />
         ))}
       </svg>
-      {trending === "up" && <span className="text-red-400 text-xs">↗</span>}
-      {trending === "down" && <span className="text-green-400 text-xs">↘</span>}
     </span>
   );
 }
@@ -437,12 +435,26 @@ function AgentCard({ agent, gatewayPort, gatewayToken, t, testResult, platformTe
             <div className="flex items-center justify-between text-xs mt-1">
               <span className="text-[var(--text-muted)]">{t("agent.todayAvgResponse")}</span>
               {agent.session.weeklyResponseMs && <MiniSparkline data={agent.session.weeklyResponseMs} />}
-              <span title={t("agent.todayAvgResponseTip")} className={`font-mono cursor-help ${
-                !agent.session.todayAvgResponseMs ? "text-[var(--text-muted)]"
-                : agent.session.todayAvgResponseMs > 50000 ? "text-red-400"
-                : agent.session.todayAvgResponseMs > 30000 ? "text-yellow-400"
-                : "text-green-400"
-              }`}>{agent.session.todayAvgResponseMs ? formatMs(agent.session.todayAvgResponseMs) : "--"}</span>
+              {(() => {
+                const val = agent.session.todayAvgResponseMs;
+                const weekly = agent.session.weeklyResponseMs || [];
+                const validVals = weekly.filter(v => v > 0);
+                let arrow = "";
+                if (validVals.length >= 2) {
+                  const last = validVals[validVals.length - 1];
+                  const prev = validVals[validVals.length - 2];
+                  arrow = last > prev ? "↗" : last < prev ? "↘" : "";
+                }
+                const colorClass = !val ? "text-[var(--text-muted)]"
+                  : val > 50000 ? "text-red-400"
+                  : val > 30000 ? "text-yellow-400"
+                  : "text-green-400";
+                return (
+                  <span title={t("agent.todayAvgResponseTip")} className={`font-mono cursor-help ${colorClass}`}>
+                    {val ? formatMs(val) : "--"}{arrow && <span className="ml-0.5">{arrow}</span>}
+                  </span>
+                );
+              })()}
             </div>
           </div>
         )}
