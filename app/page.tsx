@@ -23,6 +23,8 @@ interface Agent {
     totalTokens: number;
     contextTokens: number;
     sessionCount: number;
+    todayAvgResponseMs: number;
+    messageCount: number;
   };
 }
 
@@ -352,6 +354,10 @@ function AgentCard({ agent, gatewayPort, gatewayToken, t, testResult, platformTe
               </div>
             </div>
             <div className="flex items-center justify-between text-xs mt-1">
+              <span className="text-[var(--text-muted)]">{t("agent.messageCount")}</span>
+              <span className="text-[var(--text)]">{agent.session.messageCount}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs mt-1">
               <span className="text-[var(--text-muted)]">{t("agent.tokenUsage")}</span>
               <span className="text-[var(--text)]">{formatTokens(agent.session.totalTokens)}</span>
             </div>
@@ -361,6 +367,15 @@ function AgentCard({ agent, gatewayPort, gatewayToken, t, testResult, platformTe
                 <span className="text-[var(--text)]">{formatTimeAgo(agent.session.lastActive)}</span>
               </div>
             )}
+            <div className="flex items-center justify-between text-xs mt-1">
+              <span className="text-[var(--text-muted)]">{t("agent.todayAvgResponse")}</span>
+              <span title={t("agent.todayAvgResponseTip")} className={`font-mono cursor-help ${
+                !agent.session.todayAvgResponseMs ? "text-[var(--text-muted)]"
+                : agent.session.todayAvgResponseMs > 50000 ? "text-red-400"
+                : agent.session.todayAvgResponseMs > 30000 ? "text-yellow-400"
+                : "text-green-400"
+              }`}>{agent.session.todayAvgResponseMs ? formatMs(agent.session.todayAvgResponseMs) : "--"}</span>
+            </div>
           </div>
         )}
 
