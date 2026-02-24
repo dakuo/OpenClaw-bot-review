@@ -603,14 +603,16 @@ export default function PixelOfficePage() {
         <div className="flex flex-wrap gap-2 flex-1">
           {agents.map(agent => (
             <div key={agent.agentId} className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors ${
-              agent.state === 'working' ? 'bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)]' :
-              agent.state === 'idle' ? 'bg-[var(--card)] border-[var(--border)] text-[var(--text-muted)]' :
-              'bg-[var(--bg)] border-[var(--border)] text-[var(--text-muted)] opacity-50'
+              agent.state === 'working' ? 'bg-green-500/10 border-green-500/30 text-green-500 animate-pulse' :
+              agent.state === 'idle' ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-500 animate-pulse' :
+              'bg-slate-600/20 border-slate-500/40 text-slate-300'
             }`}>
               <span>{agent.emoji}</span>
               <span className="text-sm">{agent.name}</span>
-              {agent.state === 'working' && <span className="text-[10px] uppercase tracking-wider opacity-70">working</span>}
-              {agent.state === 'idle' && <span className="text-[10px] uppercase tracking-wider opacity-50">idle</span>}
+              {agent.state === 'working' && <span className="text-[10px] uppercase tracking-wider opacity-70">{t('pixelOffice.state.working')}</span>}
+              {agent.state === 'idle' && <span className="text-[10px] uppercase tracking-wider opacity-50">{t('pixelOffice.state.idle')}</span>}
+              {agent.state === 'offline' && <span className="text-[10px] uppercase tracking-wider opacity-40">{t('pixelOffice.state.offline')}</span>}
+              {agent.state === 'waiting' && <span className="text-[10px] uppercase tracking-wider opacity-60">{t('pixelOffice.state.waiting')}</span>}
             </div>
           ))}
           {agents.length === 0 && (

@@ -211,6 +211,10 @@ const translations: Record<Locale, Record<string, string>> = {
     "pixelOffice.undo": "撤销",
     "pixelOffice.redo": "重做",
     "pixelOffice.sound": "音效",
+    "pixelOffice.state.working": "工作中",
+    "pixelOffice.state.idle": "摸鱼中",
+    "pixelOffice.state.offline": "下班了",
+    "pixelOffice.state.waiting": "等待中",
   },
   en: {
     // layout
@@ -418,6 +422,10 @@ const translations: Record<Locale, Record<string, string>> = {
     "pixelOffice.undo": "Undo",
     "pixelOffice.redo": "Redo",
     "pixelOffice.sound": "Sound",
+    "pixelOffice.state.working": "Working",
+    "pixelOffice.state.idle": "Idle",
+    "pixelOffice.state.offline": "Offline",
+    "pixelOffice.state.waiting": "Waiting",
   },
 };
 

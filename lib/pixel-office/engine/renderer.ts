@@ -214,6 +214,10 @@ export function renderScene(
       const labelX = Math.round(offsetX + ch.x * zoom)
       const labelY = drawY - 2 * zoom
       const fontSize = Math.max(12, Math.round(5.25 * zoom))
+      const isWorking = ch.isActive && ch.state === CharacterState.TYPE
+      // Blink effect for working state: use time-based alpha
+      const labelAlpha = isWorking ? 0.7 + 0.3 * Math.sin(Date.now() / 300) : 1.0
+      const labelColor = isWorking ? `rgba(34,197,94,${labelAlpha})` : '#FFD700'
       drawables.push({
         zY: charZY + 0.1,
         draw: (c) => {
@@ -223,7 +227,7 @@ export function renderScene(
           c.textBaseline = 'bottom'
           c.fillStyle = 'rgba(0,0,0,0.9)'
           c.fillText(ch.label, labelX, labelY + 1)
-          c.fillStyle = '#FFD700'
+          c.fillStyle = labelColor
           c.fillText(ch.label, labelX, labelY)
           c.restore()
         },
