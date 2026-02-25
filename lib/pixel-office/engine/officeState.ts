@@ -23,7 +23,10 @@ import {
   layoutToFurnitureInstances,
   layoutToSeats,
   getBlockedTiles,
+  getInteractionPoints,
+  getDoorwayTiles,
 } from '../layout/layoutSerializer'
+import type { InteractionPoint } from '../layout/layoutSerializer'
 import { getCatalogEntry, getOnStateType } from '../layout/furnitureCatalog'
 
 export class OfficeState {
@@ -33,6 +36,8 @@ export class OfficeState {
   blockedTiles: Set<string>
   furniture: FurnitureInstance[]
   walkableTiles: Array<{ col: number; row: number }>
+  interactionPoints: InteractionPoint[]
+  doorwayTiles: Array<{ col: number; row: number }>
   characters: Map<number, Character> = new Map()
   selectedAgentId: number | null = null
   cameraFollowId: number | null = null
@@ -51,6 +56,8 @@ export class OfficeState {
     this.blockedTiles = getBlockedTiles(this.layout.furniture)
     this.furniture = layoutToFurnitureInstances(this.layout.furniture)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
+    this.interactionPoints = getInteractionPoints(this.layout.furniture, this.tileMap, this.blockedTiles)
+    this.doorwayTiles = getDoorwayTiles(this.layout)
   }
 
   /** Rebuild all derived state from a new layout. Reassigns existing characters.
@@ -62,6 +69,8 @@ export class OfficeState {
     this.blockedTiles = getBlockedTiles(layout.furniture)
     this.rebuildFurnitureInstances()
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
+    this.interactionPoints = getInteractionPoints(layout.furniture, this.tileMap, this.blockedTiles)
+    this.doorwayTiles = getDoorwayTiles(layout)
 
     // Shift character positions when grid expands left/up
     if (shift && (shift.col !== 0 || shift.row !== 0)) {
@@ -193,7 +202,7 @@ export class OfficeState {
     return { palette, hueShift }
   }
 
-  addAgent(id: number, preferredPalette?: number, preferredHueShift?: number, preferredSeatId?: string, skipSpawnEffect?: boolean): void {
+  addAgent(id: number, preferredPalette?: number, preferredHueShift?: number, preferredSeatId?: string, skipSpawnEffect?: boolean, spawnAtDoor?: boolean): void {
     if (this.characters.has(id)) return
 
     let palette: number
@@ -220,7 +229,35 @@ export class OfficeState {
     }
 
     let ch: Character
-    if (seatId) {
+
+    // Spawn at doorway and walk to seat
+    if (spawnAtDoor && this.doorwayTiles.length > 0 && seatId) {
+      const door = this.doorwayTiles[Math.floor(Math.random() * this.doorwayTiles.length)]
+      const seat = this.seats.get(seatId)!
+      seat.assigned = true
+      ch = createCharacter(id, palette, seatId, null, hueShift)
+      ch.tileCol = door.col
+      ch.tileRow = door.row
+      ch.x = door.col * TILE_SIZE + TILE_SIZE / 2
+      ch.y = door.row * TILE_SIZE + TILE_SIZE / 2
+      ch.dir = Direction.DOWN
+      // Pathfind from door to seat
+      const path = findPath(door.col, door.row, Math.round(seat.seatCol), Math.round(seat.seatRow), this.tileMap, this.blockedTiles)
+      if (path.length > 0) {
+        ch.path = path
+        ch.state = CharacterState.WALK
+        ch.frame = 0
+        ch.frameTimer = 0
+      } else {
+        // No path — just sit at seat directly
+        ch.tileCol = Math.round(seat.seatCol)
+        ch.tileRow = Math.round(seat.seatRow)
+        ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+        ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
+        ch.dir = seat.facingDir
+        ch.state = CharacterState.TYPE
+      }
+    } else if (seatId) {
       const seat = this.seats.get(seatId)!
       seat.assigned = true
       ch = createCharacter(id, palette, seatId, seat, hueShift)
@@ -632,7 +669,7 @@ export class OfficeState {
 
       // Temporarily unblock own seat so character can pathfind to it
       this.withOwnSeatUnblocked(ch, () =>
-        updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles)
+        updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.interactionPoints)
       )
 
       // Tick bubble timer for waiting bubbles

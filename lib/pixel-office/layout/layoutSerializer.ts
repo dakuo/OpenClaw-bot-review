@@ -1,6 +1,7 @@
 import { TileType, FurnitureType, DEFAULT_COLS, DEFAULT_ROWS, TILE_SIZE, Direction } from '../types'
 import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance, FloorColor } from '../types'
 import { getCatalogEntry } from './furnitureCatalog'
+import { isWalkable } from './tileMap'
 import { getColorizedSprite } from '../colorize'
 
 /** Convert flat tile array from layout into 2D grid */
@@ -394,4 +395,71 @@ function migrateLayout(layout: OfficeLayout): OfficeLayout {
   }
 
   return { ...layout, tileColors }
+}
+
+// ── Interaction Points ──────────────────────────────────────────
+
+export interface InteractionPoint {
+  col: number
+  row: number
+  facingDir: Direction
+  furnitureType: string
+}
+
+/** Furniture types that idle characters can interact with */
+const INTERACTABLE_TYPES = new Set([
+  FurnitureType.COOLER, FurnitureType.WATER_COOLER,
+  FurnitureType.BOOKSHELF, FurnitureType.LIBRARY_GRAY_FULL,
+  FurnitureType.WHITEBOARD, FurnitureType.FRIDGE,
+])
+
+/** Get interaction points adjacent to interactable furniture */
+export function getInteractionPoints(
+  furniture: PlacedFurniture[], tileMap: TileTypeVal[][], blockedTiles: Set<string>,
+): InteractionPoint[] {
+  const points: InteractionPoint[] = []
+  for (const item of furniture) {
+    const entry = getCatalogEntry(item.type)
+    if (!entry || !INTERACTABLE_TYPES.has(item.type as any)) continue
+    // Check tiles along the bottom edge + 1 row below the furniture
+    for (let dc = 0; dc < entry.footprintW; dc++) {
+      const belowCol = item.col + dc
+      const belowRow = item.row + entry.footprintH
+      if (isWalkable(belowCol, belowRow, tileMap, blockedTiles)) {
+        points.push({ col: belowCol, row: belowRow, facingDir: Direction.UP, furnitureType: item.type })
+      }
+    }
+    // Check tiles along the left edge
+    for (let dr = 0; dr < entry.footprintH; dr++) {
+      const leftCol = item.col - 1
+      const leftRow = item.row + dr
+      if (isWalkable(leftCol, leftRow, tileMap, blockedTiles)) {
+        points.push({ col: leftCol, row: leftRow, facingDir: Direction.RIGHT, furnitureType: item.type })
+      }
+    }
+    // Check tiles along the right edge
+    for (let dr = 0; dr < entry.footprintH; dr++) {
+      const rightCol = item.col + entry.footprintW
+      const rightRow = item.row + dr
+      if (isWalkable(rightCol, rightRow, tileMap, blockedTiles)) {
+        points.push({ col: rightCol, row: rightRow, facingDir: Direction.LEFT, furnitureType: item.type })
+      }
+    }
+  }
+  return points
+}
+
+// ── Doorway Tiles ───────────────────────────────────────────────
+
+/** Find all doorway (FLOOR_4) tiles in the layout */
+export function getDoorwayTiles(layout: OfficeLayout): Array<{ col: number; row: number }> {
+  const tiles: Array<{ col: number; row: number }> = []
+  for (let r = 0; r < layout.rows; r++) {
+    for (let c = 0; c < layout.cols; c++) {
+      if (layout.tiles[r * layout.cols + c] === TileType.FLOOR_4) {
+        tiles.push({ col: c, row: r })
+      }
+    }
+  }
+  return tiles
 }

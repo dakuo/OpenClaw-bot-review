@@ -17,6 +17,9 @@ export const WANDER_MOVES_BEFORE_REST_MIN = 3
 export const WANDER_MOVES_BEFORE_REST_MAX = 6
 export const SEAT_REST_MIN_SEC = 120.0
 export const SEAT_REST_MAX_SEC = 240.0
+export const INTERACTION_CHANCE = 0.4
+export const INTERACTION_STAY_MIN_SEC = 5.0
+export const INTERACTION_STAY_MAX_SEC = 15.0
 
 // ── Matrix Effect ────────────────────────────────────────────
 export const MATRIX_EFFECT_DURATION_SEC = 0.3

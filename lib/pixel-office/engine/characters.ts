@@ -12,7 +12,11 @@ import {
   WANDER_MOVES_BEFORE_REST_MAX,
   SEAT_REST_MIN_SEC,
   SEAT_REST_MAX_SEC,
+  INTERACTION_CHANCE,
+  INTERACTION_STAY_MIN_SEC,
+  INTERACTION_STAY_MAX_SEC,
 } from '../constants'
+import type { InteractionPoint } from '../layout/layoutSerializer'
 
 /** Round seat coords to integer for grid-based pathfinding (seats may be at half-tile positions) */
 function seatGridCol(seat: Seat): number { return Math.round(seat.seatCol) }
@@ -85,6 +89,7 @@ export function createCharacter(
     matrixEffect: null,
     matrixEffectTimer: 0,
     matrixEffectSeeds: [],
+    interactionTarget: null,
   }
 }
 
@@ -95,6 +100,7 @@ export function updateCharacter(
   seats: Map<string, Seat>,
   tileMap: TileTypeVal[][],
   blockedTiles: Set<string>,
+  interactionPoints: InteractionPoint[],
 ): void {
   ch.frameTimer += dt
 
@@ -172,6 +178,22 @@ export function updateCharacter(
           }
         }
         if (walkableTiles.length > 0) {
+          // Chance to walk to an interactable furniture instead of random tile
+          if (interactionPoints.length > 0 && Math.random() < INTERACTION_CHANCE) {
+            const ip = interactionPoints[Math.floor(Math.random() * interactionPoints.length)]
+            const path = findPath(ch.tileCol, ch.tileRow, ip.col, ip.row, tileMap, blockedTiles)
+            if (path.length > 0) {
+              ch.path = path
+              ch.moveProgress = 0
+              ch.state = CharacterState.WALK
+              ch.frame = 0
+              ch.frameTimer = 0
+              ch.interactionTarget = { col: ip.col, row: ip.row, facingDir: ip.facingDir }
+              ch.wanderCount++
+              ch.wanderTimer = randomRange(WANDER_PAUSE_MIN_SEC, WANDER_PAUSE_MAX_SEC)
+              break
+            }
+          }
           const target = walkableTiles[Math.floor(Math.random() * walkableTiles.length)]
           const path = findPath(ch.tileCol, ch.tileRow, target.col, target.row, tileMap, blockedTiles)
           if (path.length > 0) {
@@ -210,17 +232,37 @@ export function updateCharacter(
             if (seat && ch.tileCol === seatGridCol(seat) && ch.tileRow === seatGridRow(seat)) {
               ch.state = CharacterState.TYPE
               ch.dir = seat.facingDir
+              // Snap to fractional seat position for visual alignment with chair sprite
+              ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+              ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
             } else {
               ch.state = CharacterState.IDLE
             }
           }
         } else {
+          // Check if arrived at an interaction target — face furniture and linger
+          if (ch.interactionTarget &&
+              ch.tileCol === ch.interactionTarget.col &&
+              ch.tileRow === ch.interactionTarget.row) {
+            ch.dir = ch.interactionTarget.facingDir
+            ch.state = CharacterState.IDLE
+            ch.wanderTimer = randomRange(INTERACTION_STAY_MIN_SEC, INTERACTION_STAY_MAX_SEC)
+            ch.interactionTarget = null
+            // Don't count toward wanderCount — interaction is a bonus
+            ch.frame = 0
+            ch.frameTimer = 0
+            break
+          }
+          ch.interactionTarget = null // clear stale target
           // Check if arrived at assigned seat — sit down for a rest before wandering again
           if (ch.seatId) {
             const seat = seats.get(ch.seatId)
             if (seat && ch.tileCol === seatGridCol(seat) && ch.tileRow === seatGridRow(seat)) {
               ch.state = CharacterState.TYPE
               ch.dir = seat.facingDir
+              // Snap to fractional seat position for visual alignment with chair sprite
+              ch.x = seat.seatCol * TILE_SIZE + TILE_SIZE / 2
+              ch.y = seat.seatRow * TILE_SIZE + TILE_SIZE / 2
               // seatTimer < 0 is a sentinel from setAgentActive(false) meaning
               // "turn just ended" — skip the long rest so idle transition is immediate
               if (ch.seatTimer < 0) {

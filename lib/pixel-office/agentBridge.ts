@@ -19,6 +19,9 @@ export interface AgentActivity {
 /** Track which subagent toolIds were active last sync, per parent agent */
 const prevSubagentKeys = new Map<string, Set<string>>()
 
+/** Track previous agent states to detect offline→working transitions */
+const prevAgentStates = new Map<string, string>()
+
 export function syncAgentsToOffice(
   activities: AgentActivity[],
   office: OfficeState,
@@ -46,6 +49,7 @@ export function syncAgentsToOffice(
         agentIdMap.delete(activity.agentId)
         prevSubagentKeys.delete(activity.agentId)
       }
+      prevAgentStates.set(activity.agentId, 'offline')
       continue
     }
 
@@ -53,7 +57,10 @@ export function syncAgentsToOffice(
     if (charId === undefined) {
       charId = nextIdRef.current++
       agentIdMap.set(activity.agentId, charId)
-      office.addAgent(charId)
+      // Spawn at door if agent was previously offline or is brand new
+      const wasOffline = prevAgentStates.get(activity.agentId) === 'offline'
+      const isNew = !prevAgentStates.has(activity.agentId)
+      office.addAgent(charId, undefined, undefined, undefined, undefined, wasOffline || isNew)
     }
 
     // Set label (agent name or id)
@@ -100,5 +107,6 @@ export function syncAgentsToOffice(
       }
     }
     prevSubagentKeys.set(activity.agentId, currentSubKeys)
+    prevAgentStates.set(activity.agentId, activity.state)
   }
 }
