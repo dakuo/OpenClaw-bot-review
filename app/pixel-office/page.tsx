@@ -24,6 +24,12 @@ import { useI18n } from '@/lib/i18n'
 import { EditorToolbar } from './components/EditorToolbar'
 import { EditActionBar } from './components/EditActionBar'
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
+  return String(n)
+}
+
 /** Convert mouse event to tile coordinates */
 function mouseToTile(
   e: React.MouseEvent, canvas: HTMLCanvasElement, office: OfficeState, zoom: number, pan: { x: number; y: number }
@@ -69,6 +75,8 @@ export default function PixelOfficePage() {
 
   const [agents, setAgents] = useState<AgentActivity[]>([])
   const [hoveredAgentId, setHoveredAgentId] = useState<number | null>(null)
+  const mousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const agentStatsRef = useRef<Map<string, { sessionCount: number; messageCount: number; totalTokens: number; todayAvgResponseMs: number }>>(new Map())
   const contributionsRef = useRef<ContributionData | null>(null)
   const photographRef = useRef<HTMLImageElement | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
@@ -252,6 +260,31 @@ export default function PixelOfficePage() {
     return () => clearInterval(interval)
   }, [])
 
+  // Poll agent session stats from /api/config
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await fetch('/api/config')
+        const data = await res.json()
+        const map = new Map<string, { sessionCount: number; messageCount: number; totalTokens: number; todayAvgResponseMs: number }>()
+        for (const agent of (data.agents || [])) {
+          if (agent.session) {
+            map.set(agent.id, {
+              sessionCount: agent.session.sessionCount || 0,
+              messageCount: agent.session.messageCount || 0,
+              totalTokens: agent.session.totalTokens || 0,
+              todayAvgResponseMs: agent.session.todayAvgResponseMs || 0,
+            })
+          }
+        }
+        agentStatsRef.current = map
+      } catch {}
+    }
+    fetchStats()
+    const interval = setInterval(fetchStats, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   // ── Editor helpers ──────────────────────────────────────────
   const applyEdit = useCallback((newLayout: OfficeLayout) => {
     const office = officeRef.current
@@ -333,6 +366,8 @@ export default function PixelOfficePage() {
     if (!canvasRef.current || !officeRef.current) return
     const office = officeRef.current
     const editor = editorRef.current
+    const rect = canvasRef.current.getBoundingClientRect()
+    mousePosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
     const { col, row, worldX, worldY } = mouseToTile(e, canvasRef.current, office, zoomRef.current, panRef.current)
 
     if (editor.isEditMode) {
@@ -630,6 +665,22 @@ export default function PixelOfficePage() {
     panRef.current = { x: 0, y: 0 }
   }, [])
 
+  // ── Hovered agent tooltip data ──────────────────────────────
+  const getHoveredAgentInfo = useCallback(() => {
+    if (hoveredAgentId === null) return null
+    const map = agentIdMapRef.current
+    let agentId: string | null = null
+    for (const [aid, cid] of map.entries()) {
+      if (cid === hoveredAgentId) { agentId = aid; break }
+    }
+    if (!agentId) return null
+    const agent = agents.find(a => a.agentId === agentId)
+    const stats = agentStatsRef.current.get(agentId)
+    return { agent, stats }
+  }, [hoveredAgentId, agents])
+
+  const hoveredInfo = getHoveredAgentInfo()
+
   const editor = editorRef.current
   const selectedItem = editor.selectedFurnitureUid
     ? officeRef.current?.layout.furniture.find(f => f.uid === editor.selectedFurnitureUid) : null
@@ -690,6 +741,23 @@ export default function PixelOfficePage() {
           title={t('pixelOffice.resetView')}>
           ⊡
         </button>
+
+        {/* Agent hover tooltip */}
+        {hoveredInfo && hoveredInfo.agent && !isEditMode && (
+          <div className="absolute pointer-events-none z-10 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)]/95 backdrop-blur-sm text-xs shadow-lg"
+            style={{ left: Math.min(mousePosRef.current.x + 12, (containerRef.current?.clientWidth || 300) - 180), top: mousePosRef.current.y + 12 }}>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span>{hoveredInfo.agent.emoji}</span>
+              <span className="font-semibold text-[var(--text)]">{hoveredInfo.agent.name}</span>
+            </div>
+            <div className="space-y-0.5 text-[var(--text-muted)]">
+              <div className="flex justify-between gap-4"><span>{t('agent.sessionCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.sessionCount ?? '--'}</span></div>
+              <div className="flex justify-between gap-4"><span>{t('agent.messageCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.messageCount ?? '--'}</span></div>
+              <div className="flex justify-between gap-4"><span>{t('agent.tokenUsage')}</span><span className="text-[var(--text)]">{hoveredInfo.stats ? formatTokens(hoveredInfo.stats.totalTokens) : '--'}</span></div>
+              <div className="flex justify-between gap-4"><span>{t('agent.todayAvgResponse')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.todayAvgResponseMs ? `${(hoveredInfo.stats.todayAvgResponseMs / 1000).toFixed(1)}s` : '--'}</span></div>
+            </div>
+          </div>
+        )}
 
         {/* Editor overlays */}
         {isEditMode && (
