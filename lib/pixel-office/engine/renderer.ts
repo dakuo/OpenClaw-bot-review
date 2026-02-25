@@ -77,7 +77,7 @@ function renderContributionHeatmap(
   const cellH = (areaH - 6 * gapPx) / 7
 
   // Fill background so gaps between cells are consistent
-  ctx.fillStyle = HEATMAP_COLORS[0]
+  ctx.fillStyle = '#ffffff'
   ctx.fillRect(Math.round(areaX), Math.round(areaY), Math.round(areaW), Math.round(areaH))
 
   for (let w = 0; w < data.weeks.length; w++) {
