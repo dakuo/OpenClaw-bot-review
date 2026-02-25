@@ -614,6 +614,11 @@ export default function PixelOfficePage() {
     localStorage.setItem('pixel-office-sound', String(newVal))
   }, [])
 
+  const resetView = useCallback(() => {
+    zoomRef.current = 0 // triggers auto-fit on next frame
+    panRef.current = { x: 0, y: 0 }
+  }, [])
+
   const editor = editorRef.current
   const selectedItem = editor.selectedFurnitureUid
     ? officeRef.current?.layout.furniture.find(f => f.uid === editor.selectedFurnitureUid) : null
@@ -667,6 +672,13 @@ export default function PixelOfficePage() {
           onMouseDown={handleMouseDown} onMouseUp={handleMouseUp}
           onContextMenu={handleContextMenu}
           className="w-full h-full" />
+
+        {/* Reset view button */}
+        <button onClick={resetView}
+          className="absolute top-3 right-3 px-2 py-1.5 text-xs rounded-lg border bg-[var(--card)]/80 border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)] hover:border-[var(--accent)] transition-colors backdrop-blur-sm"
+          title={t('pixelOffice.resetView')}>
+          ⊡
+        </button>
 
         {/* Editor overlays */}
         {isEditMode && (
