@@ -134,6 +134,7 @@ export default function PixelOfficePage() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [fullscreenPhoto, setFullscreenPhoto] = useState(false)
   const [showModelPanel, setShowModelPanel] = useState(false)
+  const [showTokenRank, setShowTokenRank] = useState(false)
 
   const forceEditorUpdate = useCallback(() => setEditorTick(t => t + 1), [])
 
@@ -507,9 +508,16 @@ export default function PixelOfficePage() {
         return tileX >= f.col && tileX < f.col + entry.footprintW &&
                tileY >= f.row && tileY < f.row + entry.footprintH
       })
+      const onWhiteboard = office.layout.furniture.some(f => {
+        if (f.uid !== 'whiteboard-r') return false
+        const entry = getCatalogEntry(f.type)
+        if (!entry) return false
+        return tileX >= f.col && tileX < f.col + entry.footprintW &&
+               tileY >= f.row && tileY < f.row + entry.footprintH
+      })
       const onPhoto = photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1
       const onHeatmap = contributionsRef.current && contributionsRef.current.username !== 'mock' && tileX >= 1 && tileX < 10 && tileY >= -0.5 && tileY < 1
-      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || id !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
+      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || onWhiteboard || id !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
     }
   }
 
@@ -559,6 +567,15 @@ export default function PixelOfficePage() {
         })) {
           // Click on right bookshelf — show model panel
           setShowModelPanel(true)
+        } else if (office.layout.furniture.some(f => {
+          if (f.uid !== 'whiteboard-r') return false
+          const entry = getCatalogEntry(f.type)
+          if (!entry) return false
+          return tileX >= f.col && tileX < f.col + entry.footprintW &&
+                 tileY >= f.row && tileY < f.row + entry.footprintH
+        })) {
+          // Click on right whiteboard — show token ranking
+          setShowTokenRank(true)
         } else if (photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1) {
           // Click on wall photograph — fullscreen view
           setFullscreenPhoto(true)
@@ -981,6 +998,45 @@ export default function PixelOfficePage() {
             </div>
           </div>
         )}
+
+        {/* Token ranking panel (whiteboard click) */}
+        {showTokenRank && !isEditMode && (() => {
+          const ranked = agents
+            .map(a => ({ ...a, tokens: agentStatsRef.current.get(a.agentId)?.totalTokens || 0 }))
+            .sort((a, b) => b.tokens - a.tokens)
+          const maxTokens = ranked[0]?.tokens || 1
+          return (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setShowTokenRank(false)}>
+              <div className="w-80 rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl p-4" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="font-semibold text-[var(--text)]">📊 Token {t('agent.tokenUsage')}</span>
+                  <button onClick={() => setShowTokenRank(false)} className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none">×</button>
+                </div>
+                {ranked.length === 0 ? (
+                  <div className="text-xs text-[var(--text-muted)]">{t('common.noData')}</div>
+                ) : (
+                  <div className="space-y-2">
+                    {ranked.map((a, i) => (
+                      <div key={a.agentId}>
+                        <div className="flex items-center justify-between text-xs mb-0.5">
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-[var(--text-muted)] w-4">{i + 1}.</span>
+                            <span>{a.emoji}</span>
+                            <span className="text-[var(--text)]">{a.name}</span>
+                          </span>
+                          <span className="text-[var(--text)] font-mono">{formatTokens(a.tokens)}</span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-[var(--bg)] overflow-hidden">
+                          <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${(a.tokens / maxTokens) * 100}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Fullscreen photograph viewer */}
         {fullscreenPhoto && photographRef.current && (
