@@ -224,6 +224,10 @@ const translations: Record<Locale, Record<string, string>> = {
     "pixelOffice.broadcast.offline": "下班了",
     "pixelOffice.heatmap.title": "Agent 工作时间热力图",
     "pixelOffice.heatmap.messages": "条消息",
+    "pixelOffice.idleRank.title": "摸鱼排行榜",
+    "pixelOffice.idleRank.online": "在线",
+    "pixelOffice.idleRank.active": "活跃",
+    "pixelOffice.idleRank.idle": "摸鱼",
   },
   en: {
     // layout
@@ -444,6 +448,10 @@ const translations: Record<Locale, Record<string, string>> = {
     "pixelOffice.broadcast.offline": "is offline",
     "pixelOffice.heatmap.title": "Agent Activity Heatmap",
     "pixelOffice.heatmap.messages": "messages",
+    "pixelOffice.idleRank.title": "Slacking Leaderboard",
+    "pixelOffice.idleRank.online": "Online",
+    "pixelOffice.idleRank.active": "Active",
+    "pixelOffice.idleRank.idle": "Slacking",
   },
 };
 

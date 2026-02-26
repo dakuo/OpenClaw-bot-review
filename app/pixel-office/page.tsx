@@ -140,6 +140,8 @@ export default function PixelOfficePage() {
   const activityHeatmapRef = useRef<Array<{ agentId: string; grid: number[][] }> | null>(null)
   const [showPhonePanel, setShowPhonePanel] = useState(false)
   const versionInfoRef = useRef<{ tag: string; name: string; publishedAt: string; body: string; htmlUrl: string } | null>(null)
+  const [showIdleRank, setShowIdleRank] = useState(false)
+  const idleRankRef = useRef<Array<{ agentId: string; onlineMinutes: number; activeMinutes: number; idleMinutes: number; idlePercent: number }> | null>(null)
   const forceEditorUpdate = useCallback(() => setEditorTick(t => t + 1), [])
 
   // Load saved layout and sound preference
@@ -297,6 +299,14 @@ export default function PixelOfficePage() {
     fetch('/api/pixel-office/version')
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data && data.tag) versionInfoRef.current = data })
+      .catch(() => {})
+  }, [])
+
+  // Preload idle rank data
+  useEffect(() => {
+    fetch('/api/pixel-office/idle-rank')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data && data.agents) idleRankRef.current = data.agents })
       .catch(() => {})
   }, [])
 
@@ -561,9 +571,16 @@ export default function PixelOfficePage() {
         return tileX >= f.col && tileX < f.col + entry.footprintW &&
                tileY >= f.row && tileY < f.row + entry.footprintH
       })
+      const onSofa = office.layout.furniture.some(f => {
+        if (f.type !== 'sofa') return false
+        const entry = getCatalogEntry(f.type)
+        if (!entry) return false
+        return tileX >= f.col && tileX < f.col + entry.footprintW &&
+               tileY >= f.row && tileY < f.row + entry.footprintH
+      })
       const onPhoto = photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1
       const onHeatmap = contributionsRef.current && contributionsRef.current.username !== 'mock' && tileX >= 1 && tileX < 10 && tileY >= -0.5 && tileY < 1
-      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || onWhiteboard || onClock || onPhone || id !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
+      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || onWhiteboard || onClock || onPhone || onSofa || id !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
     }
   }
 
@@ -646,6 +663,15 @@ export default function PixelOfficePage() {
         })) {
           // Click on phone — show version info
           setShowPhonePanel(true)
+        } else if (office.layout.furniture.some(f => {
+          if (f.type !== 'sofa') return false
+          const entry = getCatalogEntry(f.type)
+          if (!entry) return false
+          return tileX >= f.col && tileX < f.col + entry.footprintW &&
+                 tileY >= f.row && tileY < f.row + entry.footprintH
+        })) {
+          // Click on sofa — show idle rank
+          setShowIdleRank(true)
         } else if (photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1) {
           // Click on wall photograph — fullscreen view
           setFullscreenPhoto(true)
@@ -1209,6 +1235,57 @@ export default function PixelOfficePage() {
                       className="block text-center text-xs text-[var(--accent)] hover:underline">
                       View on GitHub →
                     </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Idle rank panel (sofa click) */}
+        {showIdleRank && !isEditMode && (() => {
+          const rankData = idleRankRef.current
+          const ranked = rankData
+            ? [...rankData].sort((a, b) => b.idlePercent - a.idlePercent).map(r => {
+                const agent = agents.find(a => a.agentId === r.agentId)
+                return { ...r, emoji: agent?.emoji || '🤖', name: agent?.name || r.agentId }
+              })
+            : null
+          return (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setShowIdleRank(false)}>
+              <div className="w-80 max-h-[80%] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl p-4" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="font-semibold text-[var(--text)]">🛋️ {t('pixelOffice.idleRank.title')}</span>
+                  <button onClick={() => setShowIdleRank(false)} className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none">×</button>
+                </div>
+                {!ranked || ranked.length === 0 ? (
+                  <div className="text-xs text-[var(--text-muted)] py-8 text-center">{t('common.noData')}</div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {ranked.map((a, i) => {
+                      const barColor = a.idlePercent >= 60 ? '#4ade80' : a.idlePercent >= 30 ? '#f59e0b' : '#f87171'
+                      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`
+                      return (
+                        <div key={a.agentId}>
+                          <div className="flex items-center justify-between text-xs mb-0.5">
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-5 text-center">{medal}</span>
+                              <span>{a.emoji}</span>
+                              <span className="text-[var(--text)]">{a.name}</span>
+                            </span>
+                            <span className="font-mono font-semibold" style={{ color: barColor }}>{a.idlePercent}%</span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-[var(--bg)] overflow-hidden">
+                            <div className="h-full rounded-full transition-all" style={{ width: `${a.idlePercent}%`, backgroundColor: barColor }} />
+                          </div>
+                          <div className="flex gap-3 text-[10px] text-[var(--text-muted)] mt-0.5">
+                            <span>{t('pixelOffice.idleRank.online')} {a.onlineMinutes}m</span>
+                            <span>{t('pixelOffice.idleRank.active')} {a.activeMinutes}m</span>
+                            <span>{t('pixelOffice.idleRank.idle')} {a.idleMinutes}m</span>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
