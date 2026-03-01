@@ -1,7 +1,7 @@
-# OpenClaw Bot Dashboard（English）
+# OpenClaw Dashboard（English）
 
 A lightweight web dashboard for viewing all your [OpenClaw](https://github.com/openclaw/openclaw) Bots/Agents/Models/Sessions status at a glance.
-
+![仪表盘预览](docs/bot_dashboard.png)
 ## Background
 
 When running multiple OpenClaw agents across different platforms (Feishu, Discord, etc.), managing and monitoring them becomes increasingly complex — which bot uses which model? Are the platforms connected? Is the gateway healthy? How are tokens being consumed?
