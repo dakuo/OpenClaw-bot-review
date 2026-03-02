@@ -127,6 +127,10 @@ export function Sidebar() {
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current.active) return;
+      if (bugsEnabledRef.current) {
+        stopDrag();
+        return;
+      }
       const nextDx = dragRef.current.originDx + (e.clientX - dragRef.current.startX);
       const nextDy = dragRef.current.originDy + (e.clientY - dragRef.current.startY);
       if (Math.abs(nextDx - dragRef.current.originDx) > 3 || Math.abs(nextDy - dragRef.current.originDy) > 3) {
@@ -153,7 +157,7 @@ export function Sidebar() {
   }, []);
 
   const handleLogoMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || bugsEnabledRef.current) return;
     e.preventDefault();
     e.stopPropagation();
     dragRef.current = {
@@ -182,7 +186,7 @@ export function Sidebar() {
   };
 
   const logoTransform = `translate(${manualLogoOffset.dx + logoCarry.dx}px, ${manualLogoOffset.dy + logoCarry.dy}px) rotate(${logoCarry.angle + manualLogoAngle}rad)`;
-  const logoCursor = isLogoDragging ? "grabbing" : "grab";
+  const logoCursor = !bugsEnabled ? (isLogoDragging ? "grabbing" : "grab") : "default";
 
   return (
     <>
