@@ -123,11 +123,22 @@ export class OfficeState {
   private bugWorldWidth: number
   private bugWorldHeight: number
 
+  private buildRuntimeBlockedTiles(furniture: PlacedFurniture[]): Set<string> {
+    // Keep right-office stool seats walkable so adding subagent stools
+    // does not shrink idle wandering range.
+    const nonBlockingSeatTiles = new Set<string>()
+    for (const [seatId, seat] of this.seats.entries()) {
+      if (!seatId.startsWith('stool-r')) continue
+      nonBlockingSeatTiles.add(`${seat.seatCol},${seat.seatRow}`)
+    }
+    return getBlockedTiles(furniture, nonBlockingSeatTiles)
+  }
+
   constructor(layout?: OfficeLayout) {
     this.layout = layout || createDefaultLayout()
     this.tileMap = layoutToTileMap(this.layout)
     this.seats = layoutToSeats(this.layout.furniture)
-    this.blockedTiles = getBlockedTiles(this.layout.furniture)
+    this.blockedTiles = this.buildRuntimeBlockedTiles(this.layout.furniture)
     this.furniture = layoutToFurnitureInstances(this.layout.furniture)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
     this.interactionPoints = getInteractionPoints(this.layout.furniture, this.tileMap, this.blockedTiles)
@@ -146,7 +157,7 @@ export class OfficeState {
     this.layout = layout
     this.tileMap = layoutToTileMap(layout)
     this.seats = layoutToSeats(layout.furniture)
-    this.blockedTiles = getBlockedTiles(layout.furniture)
+    this.blockedTiles = this.buildRuntimeBlockedTiles(layout.furniture)
     this.rebuildFurnitureInstances()
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
     this.interactionPoints = getInteractionPoints(layout.furniture, this.tileMap, this.blockedTiles)
@@ -857,6 +868,7 @@ export class OfficeState {
   setAgentActive(id: number, active: boolean): void {
     const ch = this.characters.get(id)
     if (ch) {
+      if (ch.isActive === active) return
       ch.isActive = active
       if (!active) {
         // Sentinel -1: signals turn just ended, skip next seat rest timer.
