@@ -75,7 +75,7 @@ async function parseAgentSessions(agentId: string): Promise<InternalDayStat[]> {
           if (entry.usage) {
             dayMap[date].inputTokens += entry.usage.input || 0;
             dayMap[date].outputTokens += entry.usage.output || 0;
-            dayMap[date].totalTokens += entry.usage.totalTokens || 0;
+            dayMap[date].totalTokens += entry.usage.total || entry.usage.totalTokens || 0;
           }
         }
       }

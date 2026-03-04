@@ -66,7 +66,7 @@ function parseSessions(agentId: string): Omit<DayStat, "responseTimes">[] {
           const day = dayMap[date];
           day.inputTokens += entry.usage.input || 0;
           day.outputTokens += entry.usage.output || 0;
-          day.totalTokens += entry.usage.totalTokens || 0;
+          day.totalTokens += entry.usage.total || entry.usage.totalTokens || 0;
           day.messageCount += 1;
         }
       }

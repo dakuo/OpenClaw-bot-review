@@ -84,7 +84,7 @@ export async function GET() {
               const m = modelMap[key];
               m.inputTokens += entry.usage.input || 0;
               m.outputTokens += entry.usage.output || 0;
-              m.totalTokens += entry.usage.totalTokens || 0;
+              m.totalTokens += entry.usage.total || entry.usage.totalTokens || 0;
               m.messageCount += 1;
             }
           }

@@ -29,7 +29,7 @@ function getAgentState(agentId: string): AgentStatus {
   let lastAssistantTs: number | null = null;
 
   for (const sessionsDir of getSessionsDirs(agentId)) {
-    // 从 sessions.json 获取最近活跃时间
+    // nanobot: try sessions.json first, then fall back to JSONL metadata
     try {
       const sessionsPath = path.join(sessionsDir, "sessions.json");
       const raw = fs.readFileSync(sessionsPath, "utf-8");
@@ -40,31 +40,45 @@ function getAgentState(agentId: string): AgentStatus {
       }
     } catch {}
 
-    // 扫描最近的 jsonl 文件，找最近的 assistant 消息时间
     try {
       const files = fs.readdirSync(sessionsDir)
         .filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."))
         .map(f => ({ name: f, mtime: fs.statSync(path.join(sessionsDir, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime)
-        .slice(0, 5); // 只看最近5个文件
+        .slice(0, 10);
 
       for (const file of files) {
-        // 只看最近3分钟内修改过的文件
-        if (now - file.mtime > 3 * 60 * 1000) continue;
+        // Use file mtime as lastActive if we haven't found anything yet
+        if (file.mtime > (lastActive || 0)) {
+          lastActive = file.mtime;
+        }
 
+        // Read JSONL metadata for updated_at
         const content = fs.readFileSync(path.join(sessionsDir, file.name), "utf-8");
         const lines = content.trim().split("\n");
-        // 从后往前扫描，找最近的 assistant 消息
-        for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
-          try {
-            const entry = JSON.parse(lines[i]);
-            // nanobot: messages are at top level (no type:"message" wrapper)
-            if (entry.role === "assistant" && entry.timestamp) {
-              const ts = new Date(entry.timestamp).getTime();
-              if (!lastAssistantTs || ts > lastAssistantTs) lastAssistantTs = ts;
-              if (ts > (lastActive || 0)) lastActive = ts;
-            }
-          } catch {}
+
+        // Check first line for nanobot metadata with updated_at
+        try {
+          const first = JSON.parse(lines[0]);
+          if (first._type === "metadata" && first.updated_at) {
+            const ts = new Date(first.updated_at).getTime();
+            if (ts > (lastActive || 0)) lastActive = ts;
+          }
+        } catch {}
+
+        // Scan recent lines for assistant messages (for "working" detection)
+        // Only check files modified in last 5 minutes for "working" state
+        if (now - file.mtime < 5 * 60 * 1000) {
+          for (let i = lines.length - 1; i >= Math.max(0, lines.length - 30); i--) {
+            try {
+              const entry = JSON.parse(lines[i]);
+              if (entry.role === "assistant" && entry.timestamp) {
+                const ts = new Date(entry.timestamp).getTime();
+                if (!lastAssistantTs || ts > lastAssistantTs) lastAssistantTs = ts;
+                if (ts > (lastActive || 0)) lastActive = ts;
+              }
+            } catch {}
+          }
         }
       }
     } catch {}
