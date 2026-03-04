@@ -27,10 +27,12 @@ export async function GET() {
       }
     }
 
+    const webEnabled = config.gateway?.web?.enabled === true;
+
     return NextResponse.json({
       ok: true,
       data: { channels, port, host },
-      webUrl: `http://localhost:${port}/chat`,
+      webUrl: webEnabled ? `http://localhost:${port}/chat` : null,
     });
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message });

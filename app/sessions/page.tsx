@@ -34,6 +34,7 @@ interface GatewayInfo {
   port: number;
   token?: string;
   host?: string;
+  webUrl?: string | null;
 }
 
 const TYPE_EMOJI_COLOR: Record<string, { emoji: string; color: string }> = {
@@ -295,14 +296,18 @@ function SessionList({ agentId }: { agentId: string }) {
       <div className="space-y-3">
         {sessions.map((s) => {
           const typeInfo = getTypeLabel(s.type);
-          let chatUrl = buildGatewayUrl(gateway.port, "/chat", { session: s.key }, gateway.host);
-          if (gateway.token) chatUrl = buildGatewayUrl(gateway.port, "/chat", { session: s.key, token: gateway.token }, gateway.host);
+          const hasWebChat = !!gateway.webUrl;
+          let chatUrl = "";
+          if (hasWebChat) {
+            chatUrl = buildGatewayUrl(gateway.port, "/chat", { session: s.key }, gateway.host);
+            if (gateway.token) chatUrl = buildGatewayUrl(gateway.port, "/chat", { session: s.key, token: gateway.token }, gateway.host);
+          }
           return (
             <div
               key={s.key}
-              onClick={() => window.open(chatUrl, "_blank")}
-              title={t("agent.openChat")}
-              className="p-4 rounded-xl border border-[var(--border)] bg-[var(--card)] hover:border-[var(--accent)] transition cursor-pointer"
+              onClick={hasWebChat ? () => window.open(chatUrl, "_blank") : undefined}
+              title={hasWebChat ? t("agent.openChat") : undefined}
+              className={`p-4 rounded-xl border border-[var(--border)] bg-[var(--card)] hover:border-[var(--accent)] transition ${hasWebChat ? "cursor-pointer" : ""}`}
             >
               <div className="flex flex-col gap-2 mb-2 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
