@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { promises as fs, existsSync } from 'fs'
 import path from 'path'
 import os from 'os'
+import { getAgentState } from '../utils/agentState'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -33,7 +34,7 @@ function isSubtaskDescription(desc: string): boolean {
 }
 
 function isSpawnTool(name: string): boolean {
-  return name === 'sessions_spawn' || name === 'session_spawn'
+  return name === 'spawn' || name === 'sessions_spawn' || name === 'session_spawn'
 }
 
 function pickSubagentLabel(raw: unknown): string {
@@ -48,6 +49,10 @@ function pickSubagentLabel(raw: unknown): string {
 function extractCompletedSubagentLabel(text: string): string | null {
   if (!text) return null
   const patterns = [
+    // nanobot format: [Subagent 'label' completed successfully] or [Subagent 'label' failed]
+    /\[Subagent\s+'([^']+)'\s+(?:completed|failed)/i,
+    /\[Subagent\s+"([^"]+)"\s+(?:completed|failed)/i,
+    // legacy formats
     /A subagent task\s+"([^"]+)"\s+just completed/i,
     /A subagent task\s+'([^']+)'\s+just completed/i,
     /subagent task\s+"([^"]+)"\s+.*completed/i,
@@ -327,10 +332,8 @@ export async function GET() {
     const now = Date.now()
 
     for (const agent of agentList) {
-      let lastActive = 0
       let agentSessionsDir = ''
 
-      // Check agent-specific sessions
       const possibleDirs = [
         path.join(agentsDir, agent.id, 'sessions'),
       ]
@@ -341,29 +344,12 @@ export async function GET() {
       for (const dir of possibleDirs) {
         if (!existsSync(dir)) continue
         agentSessionsDir = agentSessionsDir || dir
-        try {
-          const files = await fs.readdir(dir)
-          for (const file of files) {
-            const filePath = path.join(dir, file)
-            const stat = await fs.stat(filePath)
-            if (stat.mtimeMs > lastActive) {
-              lastActive = stat.mtimeMs
-            }
-          }
-        } catch {
-          // Ignore
-        }
       }
 
-      let state: 'idle' | 'working' | 'waiting' | 'offline'
-      const timeDiff = now - lastActive
-      if (lastActive === 0 || timeDiff > 10 * 60 * 1000) {
-        state = 'offline'
-      } else if (timeDiff <= 2 * 60 * 1000) {
-        state = 'working'
-      } else {
-        state = 'idle'
-      }
+      const status = getAgentState(agent.id)
+      const state: 'idle' | 'working' | 'waiting' | 'offline' =
+        status.state === 'online' ? 'idle' : status.state
+      const lastActive = status.lastActive || 0
 
       // Parse subagents for online agents
       let subagents: SubagentInfo[] | undefined
