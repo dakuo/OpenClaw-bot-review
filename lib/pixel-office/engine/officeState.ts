@@ -226,7 +226,6 @@ export class OfficeState {
     this.spawnCat()
     this.spawnLobster()
     this.spawnHunterLobster()
-    this.ensureGatewaySre()
     this.bugWorldWidth = this.layout.cols * TILE_SIZE
     this.bugWorldHeight = this.layout.rows * TILE_SIZE
     this.bugSystem = new BugSystem(this.bugWorldWidth, this.bugWorldHeight, BUG_DEFAULT_COUNT)
@@ -555,6 +554,13 @@ export class OfficeState {
 
   ensureGatewaySre(): void {
     const id = OfficeState.GATEWAY_SRE_ID
+    const shouldExist = this.gatewaySreStatus === 'degraded' || this.gatewaySreStatus === 'down'
+
+    if (!shouldExist) {
+      this.despawnGatewaySre()
+      return
+    }
+
     if (this.characters.has(id)) return
     const spawn = this.findClosestWalkable(GATEWAY_SRE_STANDBY_COL, GATEWAY_SRE_STANDBY_ROW)
     const ch = createCharacter(id, 2, null, null, 0)
@@ -576,6 +582,17 @@ export class OfficeState {
     this.characters.set(id, ch)
   }
 
+  private despawnGatewaySre(): void {
+    const id = OfficeState.GATEWAY_SRE_ID
+    const ch = this.characters.get(id)
+    if (!ch) return
+    if (ch.matrixEffect === 'despawn') return // already despawning
+    ch.matrixEffect = 'despawn'
+    ch.matrixEffectTimer = 0
+    ch.matrixEffectSeeds = matrixEffectSeeds()
+    ch.bubbleType = null
+  }
+
   updateGatewaySreState(info: {
     status: GatewaySreState
     error?: string | null
@@ -587,11 +604,18 @@ export class OfficeState {
     this.gatewaySreError = info.error ?? null
     this.gatewaySreResponseMs = info.responseMs ?? null
     this.gatewaySreCheckedAt = info.checkedAt ?? null
+
+    const shouldExist = info.status === 'degraded' || info.status === 'down'
+    if (!shouldExist) {
+      this.despawnGatewaySre()
+      return
+    }
+
+    this.ensureGatewaySre()
     const ch = this.characters.get(OfficeState.GATEWAY_SRE_ID)
     if (!ch) return
     ch.systemStatus = this.gatewaySreStatus
     if (prevStatus !== info.status) {
-      // React immediately when gateway status changes.
       ch.wanderTimer = 0
       if (info.status === 'down') {
         ch.path = []
@@ -677,17 +701,6 @@ export class OfficeState {
     const rescuePoint = this.getGatewaySreRescuePoint(patrolTiles)
     const degradedTiles = this.getGatewaySreDegradedTiles(patrolTiles, rescuePoint)
 
-    if (this.gatewaySreStatus === 'unknown') {
-      ch.moveSpeedMultiplier = 1
-      ch.path = []
-      ch.moveProgress = 0
-      ch.state = CharacterState.IDLE
-      ch.frame = 0
-      ch.frameTimer = 0
-      ch.wanderTimer = 5
-      return
-    }
-
     if (this.gatewaySreStatus === 'down') {
       ch.moveSpeedMultiplier = 2.2
       const atRescue = ch.tileCol === rescuePoint.col && ch.tileRow === rescuePoint.row
@@ -711,10 +724,9 @@ export class OfficeState {
       return
     }
 
-    ch.moveSpeedMultiplier = this.gatewaySreStatus === 'degraded' ? 1.4 : 0.9
-    const scope = this.gatewaySreStatus === 'degraded' ? degradedTiles : patrolTiles
+    ch.moveSpeedMultiplier = 1.4
     this.withOwnSeatUnblocked(ch, () =>
-      updateCharacter(ch, dt, scope, this.seats, this.tileMap, this.blockedTiles, [])
+      updateCharacter(ch, dt, degradedTiles, this.seats, this.tileMap, this.blockedTiles, [])
     )
   }
 
