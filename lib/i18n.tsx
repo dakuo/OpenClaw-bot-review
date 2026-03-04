@@ -111,6 +111,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "agent.status.offline": "离线",
     "agent.inUse": "使用中:",
     "agent.openChat": "点击打开聊天页面",
+    "agent.subagentCount": "个子任务运行中",
 
     // platform
     "platform.feishu": "📱 飞书",
@@ -370,6 +371,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "agent.status.offline": "Offline",
     "agent.inUse": "Used by:",
     "agent.openChat": "Click to open chat",
+    "agent.subagentCount": "subagent(s) running",
 
     // platform
     "platform.feishu": "📱 Feishu",

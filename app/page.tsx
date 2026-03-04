@@ -31,6 +31,12 @@ interface Agent {
   };
 }
 
+interface SubagentInfo {
+  toolId: string;
+  label: string;
+  sessionKey?: string;
+}
+
 interface GroupChat {
   groupId: string;
   channel: string;
@@ -70,6 +76,7 @@ let cachedHomeAllStats: AllStats | null = null;
 let cachedHomeLastUpdated = "";
 let cachedHomeRefreshInterval = 0;
 let cachedHomeAgentStates: Record<string, string> = {};
+let cachedHomeAgentSubagents: Record<string, SubagentInfo[]> = {};
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -426,7 +433,7 @@ function AgentStatusBadge({ state, t }: { state?: string; t: TFunc }) {
 }
 
 // Agent 卡片
-function AgentCard({ agent, gatewayPort, gatewayToken, gatewayHost, t, testResult, platformTestResults, sessionTestResult, agentState, dmSessionResults, providerAccessModeMap }: { agent: Agent; gatewayPort: number; gatewayToken?: string; gatewayHost?: string; t: TFunc; testResult?: { ok: boolean; text?: string; error?: string; elapsed: number } | null; platformTestResults?: Record<string, PlatformTestResult | null>; sessionTestResult?: { ok: boolean; reply?: string; error?: string; elapsed: number } | null; agentState?: string; dmSessionResults?: Record<string, PlatformTestResult | null>; providerAccessModeMap?: Record<string, "auth" | "api_key"> }) {
+function AgentCard({ agent, gatewayPort, gatewayToken, gatewayHost, t, testResult, platformTestResults, sessionTestResult, agentState, dmSessionResults, providerAccessModeMap, subagents }: { agent: Agent; gatewayPort: number; gatewayToken?: string; gatewayHost?: string; t: TFunc; testResult?: { ok: boolean; text?: string; error?: string; elapsed: number } | null; platformTestResults?: Record<string, PlatformTestResult | null>; sessionTestResult?: { ok: boolean; reply?: string; error?: string; elapsed: number } | null; agentState?: string; dmSessionResults?: Record<string, PlatformTestResult | null>; providerAccessModeMap?: Record<string, "auth" | "api_key">; subagents?: SubagentInfo[] }) {
   const sessionKey = `agent:${agent.id}:main`;
   let sessionUrl = buildGatewayUrl(gatewayPort, "/chat", { session: sessionKey }, gatewayHost);
   if (gatewayToken) sessionUrl = buildGatewayUrl(gatewayPort, "/chat", { session: sessionKey, token: gatewayToken }, gatewayHost);
@@ -455,6 +462,22 @@ function AgentCard({ agent, gatewayPort, gatewayToken, gatewayHost, t, testResul
         </div>
         <AgentStatusBadge state={agentState} t={t} />
       </div>
+
+      {subagents && subagents.length > 0 && (
+        <div className="mb-1.5 px-1 py-1 rounded-lg bg-green-500/5 border border-green-500/15">
+          <div className="flex items-center gap-1 text-[10px] text-green-400 mb-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            {subagents.length} {t("agent.subagentCount")}
+          </div>
+          <div className="space-y-0.5">
+            {subagents.map((sub) => (
+              <div key={sub.toolId} className="text-[10px] text-[var(--text-muted)] truncate pl-3">
+                {sub.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1">
         <div>
@@ -610,6 +633,7 @@ export default function Home() {
   const [dmSessionResults, setDmSessionResults] = useState<Record<string, PlatformTestResult | null> | null>(null);
   const [testingDmSessions, setTestingDmSessions] = useState(false);
   const [agentStates, setAgentStates] = useState<Record<string, string>>(cachedHomeAgentStates);
+  const [agentSubagents, setAgentSubagents] = useState<Record<string, SubagentInfo[]>>(cachedHomeAgentSubagents);
 
   const RANGE_LABELS: Record<TimeRange, string> = { daily: t("range.daily"), weekly: t("range.weekly"), monthly: t("range.monthly") };
 
@@ -899,6 +923,27 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const fetchActivity = () => {
+      fetch("/api/agent-activity")
+        .then(r => r.json())
+        .then(d => {
+          if (d.agents) {
+            const map: Record<string, SubagentInfo[]> = {};
+            for (const a of d.agents) {
+              if (a.subagents?.length) map[a.agentId] = a.subagents;
+            }
+            setAgentSubagents(map);
+            cachedHomeAgentSubagents = map;
+          }
+        })
+        .catch(() => {});
+    };
+    fetchActivity();
+    const timer = setInterval(fetchActivity, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
   if (error && !data) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -999,7 +1044,7 @@ export default function Home() {
       {/* 卡片墙 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {data.agents.map((agent) => (
-          <AgentCard key={agent.id} agent={agent} gatewayPort={data.gateway?.port || 18789} gatewayToken={data.gateway?.token} gatewayHost={data.gateway?.host} t={t} testResult={testResults?.[agent.id]} platformTestResults={platformTestResults || undefined} sessionTestResult={sessionTestResults?.[agent.id]} agentState={agentStates[agent.id]} dmSessionResults={dmSessionResults || undefined} providerAccessModeMap={providerAccessModeMap} />
+          <AgentCard key={agent.id} agent={agent} gatewayPort={data.gateway?.port || 18789} gatewayToken={data.gateway?.token} gatewayHost={data.gateway?.host} t={t} testResult={testResults?.[agent.id]} platformTestResults={platformTestResults || undefined} sessionTestResult={sessionTestResults?.[agent.id]} agentState={agentStates[agent.id]} dmSessionResults={dmSessionResults || undefined} providerAccessModeMap={providerAccessModeMap} subagents={agentSubagents[agent.id]} />
         ))}
       </div>
 

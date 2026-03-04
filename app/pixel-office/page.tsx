@@ -1448,7 +1448,7 @@ export default function PixelOfficePage() {
     if (agentId) {
       const agent = agents.find(a => a.agentId === agentId)
       const stats = agentStatsRef.current.get(agentId)
-      return { kind: 'agent' as const, agent, stats, isSubagent: false as const, parentAgentId: null as string | null }
+      return { kind: 'agent' as const, agent, stats, isSubagent: false as const, parentAgentId: null as string | null, subagentLabel: null as string | null }
     }
 
     const hoveredCharacter = officeRef.current?.characters.get(hoveredAgentId)
@@ -1466,6 +1466,7 @@ export default function PixelOfficePage() {
         stats: agentStatsRef.current.get(parentAgentId),
         isSubagent: true as const,
         parentAgentId,
+        subagentLabel: hoveredCharacter.label || null,
       }
     }
 
@@ -1497,7 +1498,7 @@ export default function PixelOfficePage() {
         const subKey = sub.sessionKey ? `${sub.sessionKey}::${sub.toolId}` : sub.toolId
         expanded.push({
           agentId: `subagent:${agent.agentId}:${subKey}`,
-          name: `临时工 ${agent.agentId}`,
+          name: sub.label || agent.agentId,
           emoji: agent.emoji,
           state: 'working',
           lastActive: agent.lastActive,
@@ -1514,9 +1515,8 @@ export default function PixelOfficePage() {
   const renderAgentChip = (agent: AgentActivity, mobileGrid = false) => {
     const isTempWorker = agent.agentId.startsWith('subagent:')
     const parentAgentIdFromKey = isTempWorker ? (agent.agentId.split(':')[1] || '') : ''
-    const tempWorkerOwner = isTempWorker ? (agent.name.replace(/^临时工\s*/, '') || parentAgentIdFromKey) : ''
     const chipTooltip = isTempWorker
-      ? `${tempWorkerOwner} agent创建的subagent`
+      ? `${parentAgentIdFromKey} → ${agent.name}`
       : `agent id：${agent.agentId}`
     const chipToneClass = isTempWorker
       ? 'bg-red-900/45 border-red-700/80 text-red-100 animate-pulse'
@@ -1539,8 +1539,8 @@ export default function PixelOfficePage() {
           <span className={mobileGrid ? 'shrink-0 text-sm' : ''}>{agent.emoji}</span>
           {isTempWorker ? (
             <span className={`min-w-0 flex flex-col justify-center ${mobileGrid ? 'max-w-[4.6rem]' : 'max-w-[5.8rem]'} leading-none`}>
-              <span className={`${mobileGrid ? 'text-[10px]' : 'text-[12px]'} truncate`}>临时工</span>
-              <span className={`${mobileGrid ? 'text-[10px]' : 'text-[12px]'} truncate`}>{tempWorkerOwner}</span>
+              <span className={`${mobileGrid ? 'text-[10px]' : 'text-[12px]'} truncate`}>{agent.name}</span>
+              <span className={`${mobileGrid ? 'text-[10px]' : 'text-[12px]'} truncate text-red-300/70`}>{parentAgentIdFromKey}</span>
             </span>
           ) : (
             <span className={mobileGrid ? 'min-w-0 text-xs truncate' : 'text-sm'}>{agent.name}</span>
@@ -1715,11 +1715,11 @@ export default function PixelOfficePage() {
               <>
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <span>{hoveredInfo.agent?.emoji}</span>
-                  <span className="font-semibold text-[var(--text)]">{hoveredInfo.isSubagent ? '临时工' : hoveredInfo.agent?.name}</span>
+                  <span className="font-semibold text-[var(--text)]">{hoveredInfo.isSubagent ? (hoveredInfo.subagentLabel || hoveredInfo.agent?.name) : hoveredInfo.agent?.name}</span>
                 </div>
                 {hoveredInfo.isSubagent ? (
                   <div className="text-[var(--text-muted)]">
-                    {(hoveredInfo.parentAgentId || 'unknown')} agent创建的subagent
+                    subagent of {hoveredInfo.parentAgentId || 'unknown'}
                   </div>
                 ) : (
                   <div className="space-y-0.5 text-[var(--text-muted)]">
