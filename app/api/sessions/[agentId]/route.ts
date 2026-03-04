@@ -4,6 +4,73 @@ import path from "path";
 
 const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
+function getSlackToken(): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(NANOBOT_HOME, "config.json"), "utf-8");
+    return JSON.parse(raw).channels?.slack?.botToken || null;
+  } catch { return null; }
+}
+
+async function slackFetch(endpoint: string, token: string): Promise<any> {
+  try {
+    const res = await fetch(`https://slack.com/api/${endpoint}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    return data.ok ? data : null;
+  } catch { return null; }
+}
+
+async function resolveSlackNames(ids: string[], token: string): Promise<Record<string, string>> {
+  const names: Record<string, string> = {};
+
+  await Promise.all(ids.map(async (id) => {
+    if (id.startsWith("D")) {
+      const conv = await slackFetch(`conversations.info?channel=${id}`, token);
+      if (conv?.channel?.user) {
+        const userData = await slackFetch(`users.info?user=${conv.channel.user}`, token);
+        if (userData?.user) {
+          const u = userData.user;
+          names[id] = u.profile?.display_name || u.real_name || `@${u.name}`;
+          return;
+        }
+      }
+    } else if (id.startsWith("C")) {
+      const conv = await slackFetch(`conversations.info?channel=${id}`, token);
+      if (conv?.channel?.name) {
+        names[id] = `#${conv.channel.name}`;
+        return;
+      }
+    }
+  }));
+
+  return names;
+}
+
+function extractSlackNamesFromContent(sessionsDir: string, sessionFiles: Map<string, string>): Record<string, string> {
+  const names: Record<string, string> = {};
+
+  for (const [slackId, fileName] of sessionFiles) {
+    try {
+      const content = fs.readFileSync(path.join(sessionsDir, fileName), "utf-8");
+      const lines = content.split("\n").slice(0, 20);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.role === "user" && typeof entry.content === "string") {
+            const match = entry.content.match(/^\[([^\]]+)\]:\s/);
+            if (match) {
+              names[slackId] = `@${match[1]}`;
+              break;
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+  return names;
+}
+
 export async function GET(_req: Request, { params }: { params: Promise<{ agentId: string }> }) {
   try {
     const { agentId } = await params;
@@ -109,6 +176,40 @@ export async function GET(_req: Request, { params }: { params: Promise<{ agentId
 
     // 按最近活跃排序
     list.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const slackSessions = list.filter(s => s.type === "slack-dm" || s.type === "slack-channel");
+    if (slackSessions.length > 0) {
+      const rawIds = slackSessions.map(s => s.target.split(":")[0]);
+      const unique = [...new Set(rawIds)];
+      let names: Record<string, string> = {};
+
+      const slackToken = getSlackToken();
+      if (slackToken) {
+        names = await resolveSlackNames(unique, slackToken);
+      }
+
+      const unresolved = unique.filter(id => !names[id]);
+      if (unresolved.length > 0) {
+        const sessionFileMap = new Map<string, string>();
+        for (const s of slackSessions) {
+          const rawId = s.target.split(":")[0];
+          if (!names[rawId] && s.sessionId) {
+            sessionFileMap.set(rawId, `${s.sessionId}.jsonl`);
+          }
+        }
+        const dirs = [path.join(NANOBOT_HOME, `agents/${agentId}/sessions`)];
+        if (agentId === "main") dirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+        for (const dir of dirs) {
+          const fallback = extractSlackNamesFromContent(dir, sessionFileMap);
+          names = { ...names, ...fallback };
+        }
+      }
+
+      for (const s of slackSessions) {
+        const rawId = s.target.split(":")[0];
+        if (names[rawId]) s.target = names[rawId];
+      }
+    }
 
     return NextResponse.json({ agentId, sessions: list });
   } catch (err: any) {
