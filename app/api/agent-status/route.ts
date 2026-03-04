@@ -97,9 +97,9 @@ function getAgentState(agentId: string): AgentStatus {
     }
   }
 
-  // If gateway is not running, downgrade "working" or "online" to "idle"
-  if ((state === "working" || state === "online") && !isGatewayRunning()) {
-    state = "idle";
+  // If gateway is not running, agent can't respond — force offline
+  if (state !== "offline" && !isGatewayRunning()) {
+    state = "offline";
   }
 
   return { agentId, state, lastActive };
