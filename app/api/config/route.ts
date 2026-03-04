@@ -553,9 +553,9 @@ export async function GET() {
       defaults: { model: defaultModel, fallbacks },
       gateway: {
         port: config.gateway?.port || 18790,
-        token: "",
-        host: config.gateway?.host || config.gateway?.hostname || "",
-        webUrl: config.gateway?.web?.enabled === true ? `http://localhost:${config.gateway?.port || 18790}/chat` : null,
+        token: config.gateway?.web?.token || "",
+        host: config.gateway?.web?.host || config.gateway?.host || "127.0.0.1",
+        webUrl: config.gateway?.web?.enabled !== false ? `http://localhost:${config.gateway?.port || 18790}/chat` : null,
       },
       groupChats,
     };

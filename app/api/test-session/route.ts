@@ -15,17 +15,20 @@ export async function POST(req: Request) {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
     const gatewayPort = config.gateway?.port || 18790;
+    const webHost = config.gateway?.web?.host || "127.0.0.1";
+    const webToken = config.gateway?.web?.token || "";
 
     const startTime = Date.now();
 
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${webToken}`,
         "x-nanobot-agent-id": agentId,
         "x-nanobot-session-key": sessionKey,
       };
 
-      const resp = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+      const resp = await fetch(`http://${webHost}:${gatewayPort}/v1/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify({
