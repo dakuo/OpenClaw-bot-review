@@ -10,8 +10,10 @@ export function buildGatewayUrl(
   params?: Record<string, string>,
   hostOverride?: string,
 ): string {
-  const host = (hostOverride && hostOverride.trim()) || (typeof window !== "undefined" ? window.location.hostname : "localhost");
-  const normalizedHost = host.includes("://") ? new URL(host).hostname : host;
+  let host = (hostOverride && hostOverride.trim()) || (typeof window !== "undefined" ? window.location.hostname : "localhost");
+  if (host.includes("://")) host = new URL(host).hostname;
+  if (host === "0.0.0.0" || host === "::") host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const normalizedHost = host;
   const url = new URL(`http://${normalizedHost}:${port}${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) {

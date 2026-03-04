@@ -81,6 +81,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ agentId
       } else if (key.includes(":whatsapp:group:") || key.includes("whatsapp:group:")) {
         type = "whatsapp-group";
         target = key.split("whatsapp:group:")[1] || "";
+      } else if (key.startsWith("slack:D") || key.includes(":slack:D")) {
+        type = "slack-dm";
+        target = key.split("slack:")[1] || "";
+      } else if (key.startsWith("slack:C") || key.includes(":slack:C")) {
+        type = "slack-channel";
+        target = key.split("slack:")[1] || "";
+      } else if (key.startsWith("cli:") || key.includes(":cli:")) {
+        type = "cli";
+        target = key.split("cli:")[1] || "";
       } else if (key.includes(":cron:")) {
         type = "cron";
         target = key.split(":cron:")[1] || "";
