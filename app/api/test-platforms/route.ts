@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
 
 interface PlatformTestResult {
   agentId: string;
@@ -19,7 +19,7 @@ interface PlatformTestResult {
 // Each feishu app has its own open_id namespace, so we must use per-agent open_ids
 function getFeishuDmUser(agentId: string): string | null {
   try {
-    const sessionsPath = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
+    const sessionsPath = path.join(NANOBOT_HOME, `agents/${agentId}/sessions/sessions.json`);
     const raw = fs.readFileSync(sessionsPath, "utf-8");
     const sessions = JSON.parse(raw);
     let bestId: string | null = null;
@@ -243,7 +243,7 @@ async function testDiscord(
 // Find the most recent telegram DM chat_id for a given agent
 function getTelegramDmUser(agentId: string): string | null {
   try {
-    const sessionsPath = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
+    const sessionsPath = path.join(NANOBOT_HOME, `agents/${agentId}/sessions/sessions.json`);
     const raw = fs.readFileSync(sessionsPath, "utf-8");
     const sessions = JSON.parse(raw);
     let bestId: string | null = null;
@@ -338,7 +338,7 @@ async function testTelegram(
 // Find the most recent whatsapp DM user for a given agent
 function getWhatsappDmUser(agentId: string): string | null {
   try {
-    const sessionsPath = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
+    const sessionsPath = path.join(NANOBOT_HOME, `agents/${agentId}/sessions/sessions.json`);
     const raw = fs.readFileSync(sessionsPath, "utf-8");
     const sessions = JSON.parse(raw);
     let bestId: string | null = null;
@@ -387,7 +387,7 @@ async function testWhatsapp(
   }
 
   try {
-    // WhatsApp has no public Bot API. Use `openclaw message send` CLI
+    // WhatsApp has no public Bot API. Use `nanobot message send` CLI
     // to send a real message via the gateway's WhatsApp Web connection.
     const now = new Date().toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai" });
     const { execFileSync } = await import("child_process");
@@ -399,7 +399,7 @@ async function testWhatsapp(
       "--message", `[Platform Test] WhatsApp 联通测试 ✅ (${now})`,
     ];
 
-    const result = execFileSync("openclaw", args, {
+    const result = execFileSync("nanobot", args, {
       timeout: 30000,
       encoding: "utf-8",
       env: { ...process.env },
@@ -429,18 +429,17 @@ async function testAgentSession(agentId: string, sessionKey: string | undefined,
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${gatewayToken}`,
-      "x-openclaw-agent-id": agentId,
+      "x-nanobot-agent-id": agentId,
     };
     if (sessionKey) {
-      headers["x-openclaw-session-key"] = sessionKey;
+      headers["x-nanobot-session-key"] = sessionKey;
     }
 
     const resp = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: `openclaw:${agentId}`,
+        model: `nanobot:${agentId}`,
         messages: [{ role: "user", content: "Health check: reply with OK" }],
         max_tokens: 64,
       }),
@@ -474,61 +473,46 @@ export async function POST() {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
 
-    const bindings = config.bindings || [];
     const channels = config.channels || {};
     const feishuConfig = channels.feishu || {};
-    const feishuAccounts = feishuConfig.accounts || {};
     const feishuDomain = feishuConfig.domain || "feishu";
     const discordConfig = channels.discord || {};
-    const discordAllowFrom: string[] = discordConfig.dm?.allowFrom || [];
+    const discordAllowFrom: string[] = discordConfig.allowFrom || discordConfig.dm?.allowFrom || [];
     const discordTestUser = discordAllowFrom[0] || null;
     const telegramConfig = channels.telegram || {};
     const whatsappConfig = channels.whatsapp || {};
 
     // Read gateway config early (needed for WhatsApp test)
-    const gatewayPort = config.gateway?.port || 18789;
-    const gatewayToken = config.gateway?.auth?.token || "";
+    const gatewayPort = config.gateway?.port || 18790;
+    const gatewayToken = "";
 
-    let agentList = config.agents?.list || [];
+    // nanobot: auto-discover agents
+    let agentList: any[] = [];
+    try {
+      const agentsDir = path.join(NANOBOT_HOME, "agents");
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      agentList = dirs
+        .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d: any) => ({ id: d.name }));
+    } catch {}
     if (agentList.length === 0) {
-      try {
-        const agentsDir = path.join(OPENCLAW_HOME, "agents");
-        const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-        agentList = dirs
-          .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
-          .map((d: any) => ({ id: d.name }));
-      } catch {}
-      if (agentList.length === 0) {
-        agentList = [{ id: "main" }];
-      }
+      agentList = [{ id: "main" }];
     }
 
     // Phase 1: Platform API tests (parallel)
     const platformTests: Promise<PlatformTestResult>[] = [];
     const agentIds: string[] = [];
-    const testedFeishuAccounts = new Set<string>();
+    let feishuTested = false;
 
     for (const agent of agentList) {
       const id = agent.id;
       agentIds.push(id);
 
-      // Feishu
-      const feishuBinding = bindings.find(
-        (b: any) => b.agentId === id && b.match?.channel === "feishu"
-      );
-      const accountId = feishuBinding?.match?.accountId || id;
-      const account = feishuAccounts[accountId];
-
-      if (account && account.appId && account.appSecret && !testedFeishuAccounts.has(accountId)) {
-        testedFeishuAccounts.add(accountId);
-        const testUserId = getFeishuDmUser(id);
-        platformTests.push(testFeishu(id, accountId, account.appId, account.appSecret, feishuDomain, testUserId));
-      } else if (!feishuBinding && !account) {
-        if (id === "main" && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret && !testedFeishuAccounts.has("main")) {
-          testedFeishuAccounts.add("main");
-          const testUserId = getFeishuDmUser("main");
-          platformTests.push(testFeishu(id, "main", feishuConfig.appId, feishuConfig.appSecret, feishuDomain, testUserId));
-        }
+      // nanobot: feishu config is flat (appId/appSecret directly in channels.feishu)
+      if (id === "main" && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret && !feishuTested) {
+        feishuTested = true;
+        const testUserId = getFeishuDmUser("main");
+        platformTests.push(testFeishu(id, "main", feishuConfig.appId, feishuConfig.appSecret, feishuDomain, testUserId));
       }
 
       // Discord: only test once

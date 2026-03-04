@@ -52,7 +52,7 @@ function extractCompletedSubagentLabel(text: string): string | null {
     /A subagent task\s+'([^']+)'\s+just completed/i,
     /subagent task\s+"([^"]+)"\s+.*completed/i,
     /subagent task\s+'([^']+)'\s+.*completed/i,
-    /子任务[“"]([^”"]+)[”"].{0,12}完成/,
+    /子任务[""]([^""]+)[""].{0,12}完成/,
   ]
   for (const p of patterns) {
     const m = text.match(p)
@@ -69,6 +69,7 @@ function parseRecordTimestamp(record: unknown): number {
     if (Number.isFinite(t)) return t
   }
   if (typeof rec.timestamp === 'number' && Number.isFinite(rec.timestamp)) return rec.timestamp
+  // Also check nested message for legacy compat
   const msg = rec.message
   if (msg && typeof msg === 'object') {
     const m = msg as Record<string, unknown>
@@ -95,7 +96,36 @@ async function parseSubagentsFromSessionFile(filePath: string, sessionKey: strin
         const record = JSON.parse(line)
         const eventAt = parseRecordTimestamp(record)
 
-        // Legacy format
+        // nanobot: messages are at top level
+        // Check for tool_calls in assistant messages
+        if (record.role === 'assistant' && record.tool_calls) {
+          for (const call of record.tool_calls) {
+            if (!call.id) continue
+            if (typeof call.function?.name === 'string' && isSpawnTool(call.function.name)) {
+              let args: any = {}
+              try { args = typeof call.function.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function.arguments } catch {}
+              activeSubtasks.set(call.id, { label: pickSubagentLabel(args), at: eventAt })
+              spawnToolIds.add(call.id)
+              continue
+            }
+            if (call.function?.arguments) {
+              let args: any = {}
+              try { args = typeof call.function.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function.arguments } catch {}
+              if (typeof args.description === 'string' && isSubtaskDescription(args.description)) {
+                activeSubtasks.set(call.id, { label: args.description, at: eventAt })
+              }
+            }
+          }
+        }
+
+        // Check tool results
+        if (record.role === 'tool' && record.tool_call_id) {
+          if (!spawnToolIds.has(record.tool_call_id)) {
+            activeSubtasks.delete(record.tool_call_id)
+          }
+        }
+
+        // Legacy format support
         if (record.type === 'assistant' && record.message?.content) {
           const blocks = Array.isArray(record.message.content) ? record.message.content : []
           for (const block of blocks) {
@@ -119,7 +149,7 @@ async function parseSubagentsFromSessionFile(filePath: string, sessionKey: strin
           }
         }
 
-        // New format
+        // New format (type: "message" wrapper — legacy compat)
         if (record.type === 'message' && record.message) {
           const msg = record.message
           const role = typeof msg.role === 'string' ? msg.role : ''
@@ -154,6 +184,19 @@ async function parseSubagentsFromSessionFile(filePath: string, sessionKey: strin
                   activeSubtasks.delete(id)
                   break
                 }
+              }
+            }
+          }
+        }
+
+        // nanobot: user message with completion text
+        if (record.role === 'user' && typeof record.content === 'string') {
+          const completedLabel = extractCompletedSubagentLabel(record.content)
+          if (completedLabel) {
+            for (const [id, state] of activeSubtasks.entries()) {
+              if (state.label === completedLabel || state.label.includes(completedLabel) || completedLabel.includes(state.label)) {
+                activeSubtasks.delete(id)
+                break
               }
             }
           }
@@ -259,70 +302,84 @@ async function parseSubagents(agentSessionsDir: string, agentId: string): Promis
 }
 
 export async function GET() {
-  const openclawDir = path.join(os.homedir(), '.openclaw')
-  const configPath = path.join(openclawDir, 'openclaw.json')
-  const agentsDir = path.join(openclawDir, 'agents')
+  const nanobotDir = path.join(os.homedir(), '.nanobot')
+  const configPath = path.join(nanobotDir, 'config.json')
+  const agentsDir = path.join(nanobotDir, 'agents')
 
   const agents: AgentActivity[] = []
 
   try {
-    if (existsSync(configPath)) {
-      const configContent = await fs.readFile(configPath, 'utf8')
-      const config = JSON.parse(configContent)
+    // nanobot: auto-discover agents from agents/ directory
+    let agentList: { id: string; name?: string; emoji?: string }[] = []
+    
+    if (existsSync(agentsDir)) {
+      try {
+        const dirs = await fs.readdir(agentsDir, { withFileTypes: true })
+        agentList = dirs
+          .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+          .map(d => ({ id: d.name }))
+      } catch {}
+    }
+    if (agentList.length === 0) {
+      agentList = [{ id: 'main' }]
+    }
 
-      const agentList = Array.isArray(config.agents) ? config.agents : config.agents?.list
-      if (agentList && Array.isArray(agentList)) {
-        const now = Date.now()
+    const now = Date.now()
 
-        for (const agent of agentList) {
-          let lastActive = 0
-          let agentSessionsDir = ''
+    for (const agent of agentList) {
+      let lastActive = 0
+      let agentSessionsDir = ''
 
-          if (existsSync(agentsDir)) {
-            agentSessionsDir = path.join(agentsDir, agent.id, 'sessions')
-            if (existsSync(agentSessionsDir)) {
-              try {
-                const files = await fs.readdir(agentSessionsDir)
-                for (const file of files) {
-                  const filePath = path.join(agentSessionsDir, file)
-                  const stat = await fs.stat(filePath)
-                  if (stat.mtimeMs > lastActive) {
-                    lastActive = stat.mtimeMs
-                  }
-                }
-              } catch {
-                // Ignore
-              }
+      // Check agent-specific sessions
+      const possibleDirs = [
+        path.join(agentsDir, agent.id, 'sessions'),
+      ]
+      if (agent.id === 'main') {
+        possibleDirs.push(path.join(nanobotDir, 'workspace/sessions'))
+      }
+
+      for (const dir of possibleDirs) {
+        if (!existsSync(dir)) continue
+        agentSessionsDir = agentSessionsDir || dir
+        try {
+          const files = await fs.readdir(dir)
+          for (const file of files) {
+            const filePath = path.join(dir, file)
+            const stat = await fs.stat(filePath)
+            if (stat.mtimeMs > lastActive) {
+              lastActive = stat.mtimeMs
             }
           }
-
-          let state: 'idle' | 'working' | 'waiting' | 'offline'
-          const timeDiff = now - lastActive
-          if (lastActive === 0 || timeDiff > 10 * 60 * 1000) {
-            state = 'offline'
-          } else if (timeDiff <= 2 * 60 * 1000) {
-            state = 'working'
-          } else {
-            state = 'idle'
-          }
-
-          // Parse subagents for online agents
-          let subagents: SubagentInfo[] | undefined
-          if (state !== 'offline' && agentSessionsDir && existsSync(agentSessionsDir)) {
-            subagents = await parseSubagents(agentSessionsDir, agent.id)
-            if (subagents.length === 0) subagents = undefined
-          }
-
-          agents.push({
-            agentId: agent.id,
-            name: agent.name || agent.id,
-            emoji: agent.identity?.emoji || agent.emoji || '🤖',
-            state,
-            lastActive,
-            subagents,
-          })
+        } catch {
+          // Ignore
         }
       }
+
+      let state: 'idle' | 'working' | 'waiting' | 'offline'
+      const timeDiff = now - lastActive
+      if (lastActive === 0 || timeDiff > 10 * 60 * 1000) {
+        state = 'offline'
+      } else if (timeDiff <= 2 * 60 * 1000) {
+        state = 'working'
+      } else {
+        state = 'idle'
+      }
+
+      // Parse subagents for online agents
+      let subagents: SubagentInfo[] | undefined
+      if (state !== 'offline' && agentSessionsDir && existsSync(agentSessionsDir)) {
+        subagents = await parseSubagents(agentSessionsDir, agent.id)
+        if (subagents.length === 0) subagents = undefined
+      }
+
+      agents.push({
+        agentId: agent.id,
+        name: agent.name || agent.id,
+        emoji: agent.emoji || '🤖',
+        state,
+        lastActive,
+        subagents,
+      })
     }
   } catch (error) {
     console.error('Error reading agent activity:', error)

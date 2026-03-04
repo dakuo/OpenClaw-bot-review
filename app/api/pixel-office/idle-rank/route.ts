@@ -2,15 +2,23 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 const ACTIVE_GAP_MS = 2 * 60 * 1000; // 2 minutes — gaps longer than this count as idle
 
 // Server-side cache: 5 min TTL
 let cache: { data: any; ts: number } | null = null;
 const CACHE_TTL = 5 * 60 * 1000;
 
+function getSessionsDirs(agentId: string): string[] {
+  const dirs = [path.join(NANOBOT_HOME, `agents/${agentId}/sessions`)];
+  if (agentId === "main") {
+    dirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+  }
+  return dirs;
+}
+
 function buildIdleRankData() {
-  const agentsDir = path.join(OPENCLAW_HOME, "agents");
+  const agentsDir = path.join(NANOBOT_HOME, "agents");
   let agentIds: string[];
   try {
     agentIds = fs.readdirSync(agentsDir).filter(f =>
@@ -19,6 +27,7 @@ function buildIdleRankData() {
   } catch {
     agentIds = [];
   }
+  if (!agentIds.includes("main")) agentIds.push("main");
 
   const result: Array<{
     agentId: string;
@@ -29,39 +38,40 @@ function buildIdleRankData() {
   }> = [];
 
   for (const agentId of agentIds) {
-    const sessionsDir = path.join(agentsDir, agentId, "sessions");
-    let files: string[];
-    try {
-      files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
-    } catch { continue; }
-
     let totalOnlineMs = 0;
     let totalActiveMs = 0;
 
-    for (const file of files) {
-      let content: string;
-      try { content = fs.readFileSync(path.join(sessionsDir, file), "utf-8"); } catch { continue; }
+    for (const sessionsDir of getSessionsDirs(agentId)) {
+      let files: string[];
+      try {
+        files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
+      } catch { continue; }
 
-      const timestamps: number[] = [];
-      for (const line of content.trim().split("\n")) {
-        let entry: any;
-        try { entry = JSON.parse(line); } catch { continue; }
-        if (!entry.timestamp) continue;
-        const ts = new Date(entry.timestamp).getTime();
-        if (!isNaN(ts)) timestamps.push(ts);
-      }
+      for (const file of files) {
+        let content: string;
+        try { content = fs.readFileSync(path.join(sessionsDir, file), "utf-8"); } catch { continue; }
 
-      if (timestamps.length < 2) continue;
-      timestamps.sort((a, b) => a - b);
+        const timestamps: number[] = [];
+        for (const line of content.trim().split("\n")) {
+          let entry: any;
+          try { entry = JSON.parse(line); } catch { continue; }
+          if (!entry.timestamp) continue;
+          const ts = new Date(entry.timestamp).getTime();
+          if (!isNaN(ts)) timestamps.push(ts);
+        }
 
-      // Online time: first to last message
-      totalOnlineMs += timestamps[timestamps.length - 1] - timestamps[0];
+        if (timestamps.length < 2) continue;
+        timestamps.sort((a, b) => a - b);
 
-      // Active time: sum of gaps ≤ ACTIVE_GAP_MS
-      for (let i = 1; i < timestamps.length; i++) {
-        const gap = timestamps[i] - timestamps[i - 1];
-        if (gap <= ACTIVE_GAP_MS) {
-          totalActiveMs += gap;
+        // Online time: first to last message
+        totalOnlineMs += timestamps[timestamps.length - 1] - timestamps[0];
+
+        // Active time: sum of gaps ≤ ACTIVE_GAP_MS
+        for (let i = 1; i < timestamps.length; i++) {
+          const gap = timestamps[i] - timestamps[i - 1];
+          if (gap <= ACTIVE_GAP_MS) {
+            totalActiveMs += gap;
+          }
         }
       }
     }

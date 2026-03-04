@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
 
 interface DmSessionResult {
   agentId: string;
@@ -15,29 +15,37 @@ interface DmSessionResult {
 }
 
 function getDmUser(agentId: string, platform: string): string | null {
-  try {
-    const sessionsPath = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
-    const raw = fs.readFileSync(sessionsPath, "utf-8");
-    const sessions = JSON.parse(raw);
-    let bestId: string | null = null;
-    let bestTime = 0;
-    const pattern = platform === "feishu"
-      ? /^agent:[^:]+:feishu:direct:(ou_[a-f0-9]+)$/
-      : new RegExp(`^agent:[^:]+:${platform}:direct:(.+)$`);
-    for (const [key, val] of Object.entries(sessions)) {
-      const m = key.match(pattern);
-      if (m) {
-        const updatedAt = (val as any).updatedAt || 0;
-        if (updatedAt > bestTime) {
-          bestTime = updatedAt;
-          bestId = m[1];
+  // Check multiple session locations
+  const candidates = [
+    path.join(NANOBOT_HOME, `agents/${agentId}/sessions/sessions.json`),
+  ];
+  if (agentId === "main") {
+    candidates.push(path.join(NANOBOT_HOME, "workspace/sessions/sessions.json"));
+  }
+
+  let bestId: string | null = null;
+  let bestTime = 0;
+  const pattern = platform === "feishu"
+    ? /(?:^agent:[^:]+:)?feishu:direct:(ou_[a-f0-9]+)$/
+    : new RegExp(`(?:^agent:[^:]+:)?${platform}:direct:(.+)$`);
+
+  for (const sessionsPath of candidates) {
+    try {
+      const raw = fs.readFileSync(sessionsPath, "utf-8");
+      const sessions = JSON.parse(raw);
+      for (const [key, val] of Object.entries(sessions)) {
+        const m = key.match(pattern);
+        if (m) {
+          const updatedAt = (val as any).updatedAt || 0;
+          if (updatedAt > bestTime) {
+            bestTime = updatedAt;
+            bestId = m[1];
+          }
         }
       }
-    }
-    return bestId;
-  } catch {
-    return null;
+    } catch {}
   }
+  return bestId;
 }
 
 async function testDmSession(
@@ -45,7 +53,6 @@ async function testDmSession(
   platform: string,
   sessionKey: string,
   gatewayPort: number,
-  gatewayToken: string
 ): Promise<DmSessionResult> {
   const startTime = Date.now();
   try {
@@ -53,12 +60,11 @@ async function testDmSession(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${gatewayToken}`,
-        "x-openclaw-agent-id": agentId,
-        "x-openclaw-session-key": sessionKey,
+        "x-nanobot-agent-id": agentId,
+        "x-nanobot-session-key": sessionKey,
       },
       body: JSON.stringify({
-        model: `openclaw:${agentId}`,
+        model: `nanobot:${agentId}`,
         messages: [{ role: "user", content: "Health check: reply with OK" }],
         max_tokens: 64,
       }),
@@ -83,22 +89,19 @@ export async function POST() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
-    const gatewayPort = config.gateway?.port || 18789;
-    const gatewayToken = config.gateway?.auth?.token || "";
+    const gatewayPort = config.gateway?.port || 18790;
     const channels = config.channels || {};
-    const bindings = config.bindings || [];
 
-    let agentList = config.agents?.list || [];
-    if (agentList.length === 0) {
-      try {
-        const agentsDir = path.join(OPENCLAW_HOME, "agents");
-        const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-        agentList = dirs
-          .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
-          .map((d: any) => ({ id: d.name }));
-      } catch {}
-      if (agentList.length === 0) agentList = [{ id: "main" }];
-    }
+    // nanobot: auto-discover agents
+    let agentList: any[] = [];
+    try {
+      const agentsDir = path.join(NANOBOT_HOME, "agents");
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      agentList = dirs
+        .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d: any) => ({ id: d.name }));
+    } catch {}
+    if (agentList.length === 0) agentList = [{ id: "main" }];
 
     const results: DmSessionResult[] = [];
     const platformsToTest = ["feishu", "discord", "telegram", "whatsapp"];
@@ -106,21 +109,17 @@ export async function POST() {
     for (const agent of agentList) {
       const id = agent.id;
       for (const platform of platformsToTest) {
-        // Check if this agent has this platform configured
         const ch = channels[platform];
         if (!ch || ch.enabled === false) continue;
 
-        const isMain = id === "main";
-        const hasBinding = bindings.some(
-          (b: any) => b.agentId === id && b.match?.channel === platform
-        );
-        if (!isMain && !hasBinding) continue;
+        // nanobot: channels bind directly, main agent gets all channels
+        if (id !== "main") continue;
 
         const dmUser = getDmUser(id, platform);
         if (!dmUser) continue;
 
         const sessionKey = `agent:${id}:${platform}:direct:${dmUser}`;
-        const r = await testDmSession(id, platform, sessionKey, gatewayPort, gatewayToken);
+        const r = await testDmSession(id, platform, sessionKey, gatewayPort);
         results.push(r);
       }
     }

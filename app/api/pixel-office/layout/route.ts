@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 
-const LAYOUT_DIR = path.join(os.homedir(), '.openclaw', 'pixel-office')
+const LAYOUT_DIR = path.join(os.homedir(), '.nanobot', 'pixel-office')
 const LAYOUT_FILE = path.join(LAYOUT_DIR, 'layout.json')
 
 export async function GET() {

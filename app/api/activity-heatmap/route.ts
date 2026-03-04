@@ -2,14 +2,22 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
 // Server-side cache: 5 min TTL
 let cache: { data: any; ts: number } | null = null;
 const CACHE_TTL = 5 * 60 * 1000;
 
+function getSessionsDirs(agentId: string): string[] {
+  const dirs = [path.join(NANOBOT_HOME, `agents/${agentId}/sessions`)];
+  if (agentId === "main") {
+    dirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+  }
+  return dirs;
+}
+
 function buildHeatmapData() {
-  const agentsDir = path.join(OPENCLAW_HOME, "agents");
+  const agentsDir = path.join(NANOBOT_HOME, "agents");
   let agentIds: string[];
   try {
     agentIds = fs.readdirSync(agentsDir).filter(f =>
@@ -18,33 +26,37 @@ function buildHeatmapData() {
   } catch {
     agentIds = [];
   }
+  if (!agentIds.includes("main")) agentIds.push("main");
 
   const result: { agentId: string; grid: number[][] }[] = [];
 
   for (const agentId of agentIds) {
     const grid: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
-    const sessionsDir = path.join(agentsDir, agentId, "sessions");
-    let files: string[];
-    try {
-      files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
-    } catch { continue; }
 
-    for (const file of files) {
-      let content: string;
-      try { content = fs.readFileSync(path.join(sessionsDir, file), "utf-8"); } catch { continue; }
+    for (const sessionsDir of getSessionsDirs(agentId)) {
+      let files: string[];
+      try {
+        files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
+      } catch { continue; }
 
-      for (const line of content.trim().split("\n")) {
-        let entry: any;
-        try { entry = JSON.parse(line); } catch { continue; }
-        if (entry.type !== "message" || !entry.message || !entry.timestamp) continue;
-        if (entry.message.role !== "assistant") continue;
+      for (const file of files) {
+        let content: string;
+        try { content = fs.readFileSync(path.join(sessionsDir, file), "utf-8"); } catch { continue; }
 
-        const dt = new Date(entry.timestamp);
-        const shanghai = new Date(dt.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
-        const hour = shanghai.getHours();
-        const jsDay = shanghai.getDay(); // 0=Sun
-        const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1; // 0=Mon … 6=Sun
-        grid[dayOfWeek][hour]++;
+        for (const line of content.trim().split("\n")) {
+          let entry: any;
+          try { entry = JSON.parse(line); } catch { continue; }
+          // nanobot: messages are at top level
+          if (entry._type === "metadata") continue;
+          if (entry.role !== "assistant" || !entry.timestamp) continue;
+
+          const dt = new Date(entry.timestamp);
+          const shanghai = new Date(dt.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
+          const hour = shanghai.getHours();
+          const jsDay = shanghai.getDay(); // 0=Sun
+          const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1; // 0=Mon … 6=Sun
+          grid[dayOfWeek][hour]++;
+        }
       }
     }
 

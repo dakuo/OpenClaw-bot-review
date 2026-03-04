@@ -48,7 +48,7 @@ export function GlobalBugsOverlay() {
     const onStorage = () => applyConfig();
     const onConfigChanged = () => applyConfig();
     const getVisibleLogoAnchorCenter = (): { x: number; y: number } | null => {
-      const anchors = Array.from(document.querySelectorAll<HTMLElement>("[data-openclaw-logo-anchor='true']"));
+      const anchors = Array.from(document.querySelectorAll<HTMLElement>("[data-nanobot-logo-anchor='true']"));
       for (const anchor of anchors) {
         const rect = anchor.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) continue;
@@ -86,7 +86,7 @@ export function GlobalBugsOverlay() {
     const onLogoDragStop = () => {
       if (!systemRef.current) return;
       systemRef.current.stopLogoCarry();
-      window.dispatchEvent(new CustomEvent("openclaw-logo-carry-progress", {
+      window.dispatchEvent(new CustomEvent("nanobot-logo-carry-progress", {
         detail: { dx: 0, dy: 0, angle: 0, hidden: false, active: false },
       }));
     };
@@ -98,9 +98,9 @@ export function GlobalBugsOverlay() {
     };
 
     window.addEventListener("storage", onStorage);
-    window.addEventListener("openclaw-bugs-config-change", onConfigChanged as EventListener);
-    window.addEventListener("openclaw-logo-drag-start", onLogoDragStart as EventListener);
-    window.addEventListener("openclaw-logo-drag-stop", onLogoDragStop as EventListener);
+    window.addEventListener("nanobot-bugs-config-change", onConfigChanged as EventListener);
+    window.addEventListener("nanobot-logo-drag-start", onLogoDragStart as EventListener);
+    window.addEventListener("nanobot-logo-drag-stop", onLogoDragStop as EventListener);
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseout", onLeave);
 
@@ -124,7 +124,7 @@ export function GlobalBugsOverlay() {
         systemRef.current.setCursor(mouseRef.current.x / BUGS_ZOOM, mouseRef.current.y / BUGS_ZOOM, mouseRef.current.active);
         systemRef.current.update(dt, w / BUGS_ZOOM, h / BUGS_ZOOM);
         const carry = systemRef.current.getLogoCarryVisual();
-        window.dispatchEvent(new CustomEvent("openclaw-logo-carry-progress", {
+        window.dispatchEvent(new CustomEvent("nanobot-logo-carry-progress", {
           detail: { dx: carry.dx * BUGS_ZOOM, dy: carry.dy * BUGS_ZOOM, angle: carry.angle, hidden: carry.hidden, active: carry.active },
         }));
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -138,9 +138,9 @@ export function GlobalBugsOverlay() {
 
     return () => {
       window.removeEventListener("storage", onStorage);
-      window.removeEventListener("openclaw-bugs-config-change", onConfigChanged as EventListener);
-      window.removeEventListener("openclaw-logo-drag-start", onLogoDragStart as EventListener);
-      window.removeEventListener("openclaw-logo-drag-stop", onLogoDragStop as EventListener);
+      window.removeEventListener("nanobot-bugs-config-change", onConfigChanged as EventListener);
+      window.removeEventListener("nanobot-logo-drag-start", onLogoDragStart as EventListener);
+      window.removeEventListener("nanobot-logo-drag-stop", onLogoDragStop as EventListener);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseout", onLeave);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);

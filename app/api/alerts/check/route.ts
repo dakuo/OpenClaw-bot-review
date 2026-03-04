@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const ALERTS_CONFIG_PATH = path.join(OPENCLAW_HOME, "alerts.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const ALERTS_CONFIG_PATH = path.join(NANOBOT_HOME, "alerts.json");
 
 interface AlertRule {
   id: string;
@@ -36,8 +36,8 @@ function getAlertConfig(): AlertConfig {
   ], lastAlerts: {} };
 }
 
-function getOpenclawConfig() {
-  const configPath = path.join(OPENCLAW_HOME, "openclaw.json");
+function getNanobotConfig() {
+  const configPath = path.join(NANOBOT_HOME, "config.json");
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     return JSON.parse(raw);
@@ -55,45 +55,25 @@ function saveAlertConfig(config: AlertConfig): void {
 }
 
 function getGatewayConfig() {
-  const configPath = path.join(OPENCLAW_HOME, "openclaw.json");
+  const configPath = path.join(NANOBOT_HOME, "config.json");
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
     return {
-      port: config.gateway?.port || 18789,
-      token: config.gateway?.auth?.token || "",
+      port: config.gateway?.port || 18790,
+      token: "",
       feishu: config.channels?.feishu || {},
     };
   } catch {
-    return { port: 18789, token: "", feishu: {} };
+    return { port: 18790, token: "", feishu: {} };
   }
 }
 
-// 获取 agent 对应的飞书账号配置
-function getFeishuAccountForAgent(agentId: string, feishuConfig: any, bindings: any[]): { appId: string; appSecret: string; accountId: string } | null {
-  const feishuAccounts = feishuConfig.accounts || {};
-  
-  // 查找显式绑定
-  const feishuBinding = bindings.find((b: any) => b.agentId === agentId && b.match?.channel === "feishu");
-  if (feishuBinding) {
-    const accountId = feishuBinding.match?.accountId || agentId;
-    const account = feishuAccounts[accountId];
-    if (account?.appId && account?.appSecret) {
-      return { appId: account.appId, appSecret: account.appSecret, accountId };
-    }
-  }
-  
-  // 检查是否有同名账号
-  if (feishuAccounts[agentId]) {
-    const account = feishuAccounts[agentId];
-    if (account?.appId && account?.appSecret) {
-      return { appId: account.appId, appSecret: account.appSecret, accountId: agentId };
-    }
-  }
-  
-  // main agent fallback
-  if (agentId === "main" && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
-    return { appId: feishuConfig.appId, appSecret: feishuConfig.appSecret, accountId: "main" };
+// 获取 agent 对应的飞书账号配置 — nanobot: simpler, just appId/appSecret in channels.feishu
+function getFeishuAccountForAgent(agentId: string, feishuConfig: any): { appId: string; appSecret: string; accountId: string } | null {
+  // nanobot: feishu config is flat — appId/appSecret directly in channels.feishu
+  if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
+    return { appId: feishuConfig.appId, appSecret: feishuConfig.appSecret, accountId: agentId };
   }
   
   return null;
@@ -101,41 +81,45 @@ function getFeishuAccountForAgent(agentId: string, feishuConfig: any, bindings: 
 
 // 获取 agent 最近的发过消息的飞书用户
 function getFeishuDmUser(agentId: string): string | null {
-  try {
-    const sessionsPath = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions/sessions.json`);
-    const raw = fs.readFileSync(sessionsPath, "utf-8");
-    const sessions = JSON.parse(raw);
-    let bestId: string | null = null;
-    let bestTime = 0;
-    for (const [key, val] of Object.entries(sessions)) {
-      const m = key.match(/^agent:[^:]+:feishu:direct:(ou_[a-f0-9]+)$/);
-      if (m) {
-        const updatedAt = (val as any).updatedAt || 0;
-        if (updatedAt > bestTime) {
-          bestTime = updatedAt;
-          bestId = m[1];
+  // Check multiple session locations
+  const candidates = [
+    path.join(NANOBOT_HOME, `agents/${agentId}/sessions/sessions.json`),
+  ];
+  if (agentId === "main") {
+    candidates.push(path.join(NANOBOT_HOME, "workspace/sessions/sessions.json"));
+  }
+
+  let bestId: string | null = null;
+  let bestTime = 0;
+
+  for (const sessionsPath of candidates) {
+    try {
+      const raw = fs.readFileSync(sessionsPath, "utf-8");
+      const sessions = JSON.parse(raw);
+      for (const [key, val] of Object.entries(sessions)) {
+        const m = key.match(/(?:^agent:[^:]+:)?feishu:direct:(ou_[a-f0-9]+)$/);
+        if (m) {
+          const updatedAt = (val as any).updatedAt || 0;
+          if (updatedAt > bestTime) {
+            bestTime = updatedAt;
+            bestId = m[1];
+          }
         }
       }
-    }
-    return bestId;
-  } catch {
-    return null;
+    } catch {}
   }
+  return bestId;
 }
 
 // 通过飞书 API 发送告警消息
 async function sendAlertViaFeishu(agentId: string, message: string) {
   console.log(`[ALERT] sendAlertViaFeishu called with agentId: ${agentId}, message: ${message}`);
   
-  const openclawConfig = getOpenclawConfig();
-  const feishuConfig = openclawConfig.channels?.feishu || {};
-  const feishuAccounts = feishuConfig.accounts || {};
-  const bindings = openclawConfig.bindings || [];
-  
-  console.log(`[ALERT] Feishu accounts found:`, Object.keys(feishuAccounts));
+  const nanobotConfig = getNanobotConfig();
+  const feishuConfig = nanobotConfig.channels?.feishu || {};
   
   // 获取 agent 对应的飞书账号配置
-  const accountInfo = getFeishuAccountForAgent(agentId, feishuConfig, bindings);
+  const accountInfo = getFeishuAccountForAgent(agentId, feishuConfig);
   if (!accountInfo) {
     console.log(`[ALERT] No Feishu account found for agent ${agentId}`);
     return { sent: false, error: `No account for agent ${agentId}` };
@@ -173,8 +157,6 @@ async function sendAlertViaFeishu(agentId: string, message: string) {
     // 发送 DM - 使用 user_id_type 确保正确识别用户
     const now = new Date().toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai" });
     
-    // 先尝试获取用户的 union_id 或 user_id
-    // 如果失败则使用 open_id
     const msgResp = await fetch(`${baseUrl}/open-apis/im/v1/messages?receive_id_type=user_id`, {
       method: "POST",
       headers: {
@@ -229,11 +211,10 @@ async function sendAlertViaFeishu(agentId: string, message: string) {
   }
 }
 
-// 发送告警消息 - 使用 OpenClaw Gateway API
+// 发送告警消息 - 使用 nanobot Gateway API
 async function sendAlert(agentId: string, message: string) {
-  const openclawConfig = getOpenclawConfig();
-  const gatewayPort = openclawConfig.gateway?.port || 18789;
-  const gatewayToken = openclawConfig.gateway?.auth?.token || "";
+  const nanobotConfig = getNanobotConfig();
+  const gatewayPort = nanobotConfig.gateway?.port || 18790;
   
   // 使用 sessionKey 发送到正确的 agent
   const sessionKey = `agent:${agentId}:main`;
@@ -244,8 +225,7 @@ async function sendAlert(agentId: string, message: string) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${gatewayToken}`,
-        "x-openclaw-agent-id": agentId,
+        "x-nanobot-agent-id": agentId,
       },
       body: JSON.stringify({
         session: sessionKey,
@@ -272,47 +252,41 @@ async function checkModelAlerts(config: AlertConfig) {
   const rule = config.rules.find(r => r.id === "model_unavailable");
   if (!rule?.enabled) return results;
 
-  // 读取配置中的所有模型
-  const openclawConfig = getOpenclawConfig();
-  const providers = openclawConfig.models?.providers || {};
-
-  // 测试每个模型
-  const allModels: Array<{provider: string, id: string}> = [];
-  for (const [providerId, provider] of Object.entries(providers)) {
-    const p = provider as any;
-    if (p.models && Array.isArray(p.models)) {
-      for (const model of p.models) {
-        allModels.push({provider: providerId, id: model.id});
-      }
-    }
-  }
-
-  // 测试所有模型
-  for (const {provider, id} of allModels) {
-    try {
-      const testStart = Date.now();
-      const testResp = await fetch("http://localhost:3000/api/test-model", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({provider, modelId: id}),
-        signal: AbortSignal.timeout(10000),
-      });
-      
-      const testResult = await testResp.json();
-      
-      if (!testResult.ok) {
-        results.push(`🚨 模型 ${provider}/${id} 不可用！`);
+  // nanobot: providers are at root level, no explicit model lists
+  // We can infer models from agents.defaults.model
+  const nanobotConfig = getNanobotConfig();
+  const defaultModel = nanobotConfig.agents?.defaults?.model;
+  
+  if (defaultModel && typeof defaultModel === "string") {
+    const slashIdx = defaultModel.indexOf("/");
+    if (slashIdx > 0) {
+      const provider = defaultModel.slice(0, slashIdx);
+      const id = defaultModel.slice(slashIdx + 1);
+      try {
+        const testStart = Date.now();
+        const testResp = await fetch("http://localhost:3000/api/test-model", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider, modelId: id}),
+          signal: AbortSignal.timeout(10000),
+        });
         
-        const lastAlert = config.lastAlerts?.[`${rule.id}_${provider}_${id}`] || 0;
-        const now = Date.now();
-        if (now - lastAlert > 60000) {
-          await sendAlertViaFeishu(config.receiveAgent, `模型 ${provider}/${id} 不可用，请检查配置`);
-          config.lastAlerts = config.lastAlerts || {};
-          config.lastAlerts[`${rule.id}_${provider}_${id}`] = now;
+        const testResult = await testResp.json();
+        
+        if (!testResult.ok) {
+          results.push(`🚨 模型 ${provider}/${id} 不可用！`);
+          
+          const lastAlert = config.lastAlerts?.[`${rule.id}_${provider}_${id}`] || 0;
+          const now = Date.now();
+          if (now - lastAlert > 60000) {
+            await sendAlertViaFeishu(config.receiveAgent, `模型 ${provider}/${id} 不可用，请检查配置`);
+            config.lastAlerts = config.lastAlerts || {};
+            config.lastAlerts[`${rule.id}_${provider}_${id}`] = now;
+          }
         }
+      } catch (err: any) {
+        results.push(`🚨 测试模型 ${provider}/${id} 时出错：${err.message}`);
       }
-    } catch (err: any) {
-      results.push(`🚨 测试模型 ${provider}/${id} 时出错：${err.message}`);
     }
   }
 
@@ -325,13 +299,14 @@ async function checkBotResponseAlerts(config: AlertConfig) {
   const rule = config.rules.find(r => r.id === "bot_no_response");
   if (!rule?.enabled) return results;
 
-  const agentsDir = path.join(OPENCLAW_HOME, "agents");
+  const agentsDir = path.join(NANOBOT_HOME, "agents");
   let agentIds: string[] = [];
   try {
     agentIds = fs.readdirSync(agentsDir).filter(f => 
       fs.statSync(path.join(agentsDir, f)).isDirectory()
     );
-  } catch { return results; }
+  } catch {}
+  if (!agentIds.includes("main")) agentIds.push("main");
 
   // 如果配置了 targetAgents，只检测指定的机器人
   const targetAgents = rule.targetAgents;
@@ -340,28 +315,37 @@ async function checkBotResponseAlerts(config: AlertConfig) {
   }
 
   for (const agentId of agentIds) {
-    const sessionsDir = path.join(agentsDir, agentId, "sessions");
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl"));
-    } catch { continue; }
+    // Check multiple session directories
+    const sessionsDirs = [
+      path.join(agentsDir, agentId, "sessions"),
+    ];
+    if (agentId === "main") {
+      sessionsDirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+    }
 
     let lastActivity = 0;
-    for (const file of files) {
-      const filePath = path.join(sessionsDir, file);
+    for (const sessionsDir of sessionsDirs) {
+      let files: string[] = [];
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const lines = content.trim().split("\n");
-        for (const line of lines) {
-          try {
-            const entry = JSON.parse(line);
-            if (entry.timestamp) {
-              const ts = new Date(entry.timestamp).getTime();
-              if (ts > lastActivity) lastActivity = ts;
-            }
-          } catch {}
-        }
-      } catch {}
+        files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl"));
+      } catch { continue; }
+
+      for (const file of files) {
+        const filePath = path.join(sessionsDir, file);
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          const lines = content.trim().split("\n");
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.timestamp) {
+                const ts = new Date(entry.timestamp).getTime();
+                if (ts > lastActivity) lastActivity = ts;
+              }
+            } catch {}
+          }
+        } catch {}
+      }
     }
 
     const now = Date.now();
@@ -389,13 +373,13 @@ async function checkCronAlerts(config: AlertConfig) {
   if (!rule?.enabled) return results;
 
   // 检查 cron 任务状态（简化版：检查 sessions 中是否有失败的 cron 任务）
-  const agentsDir = path.join(OPENCLAW_HOME, "agents");
+  const agentsDir = path.join(NANOBOT_HOME, "agents");
   let agentIds: string[] = [];
   try {
     agentIds = fs.readdirSync(agentsDir).filter(f => 
       fs.statSync(path.join(agentsDir, f)).isDirectory()
     );
-  } catch { return results; }
+  } catch {}
 
   // 模拟检查（实际应该记录 cron 失败次数）
   const mockCronFailures = Math.floor(Math.random() * 5); // 模拟 0-4 次失败

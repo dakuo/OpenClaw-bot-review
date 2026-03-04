@@ -72,10 +72,10 @@ const CODE_SNIPPETS = [
   '在吗？', '已读不回', '先这样吧', '回滚！', '又挂了',
   '谁动了我的分支', '这不是bug', '需求又变了', '上线吧', '别碰那个文件',
   '跑不起来啊', '重启试试', '这是谁写的屎山！！！', '谁删我代码了？？？tmd', '又500了', '删库跑路再说！！！',
-  // OpenClaw CLI
-  'openclaw status', 'openclaw gateway start', 'openclaw gateway restart',
-  'openclaw logs', 'openclaw doctor', 'openclaw config get',
-  'openclaw message send', 'openclaw skills', 'openclaw models', 'openclaw update',
+  // nanobot CLI
+  'nanobot status', 'nanobot gateway start', 'nanobot gateway restart',
+  'nanobot logs', 'nanobot doctor', 'nanobot config get',
+  'nanobot message send', 'nanobot skills', 'nanobot models', 'nanobot update',
 ]
 
 const PHOTO_COMMENTS = [

@@ -77,13 +77,13 @@ export function Sidebar() {
       if (!d) return;
       setLogoCarry({ active: !!d.active, dx: d.dx || 0, dy: d.dy || 0, angle: d.angle || 0, hidden: !!d.hidden });
     };
-    window.addEventListener("openclaw-logo-drag-start", onStart as EventListener);
-    window.addEventListener("openclaw-logo-drag-stop", onStop as EventListener);
-    window.addEventListener("openclaw-logo-carry-progress", onProgress as EventListener);
+    window.addEventListener("nanobot-logo-drag-start", onStart as EventListener);
+    window.addEventListener("nanobot-logo-drag-stop", onStop as EventListener);
+    window.addEventListener("nanobot-logo-carry-progress", onProgress as EventListener);
     return () => {
-      window.removeEventListener("openclaw-logo-drag-start", onStart as EventListener);
-      window.removeEventListener("openclaw-logo-drag-stop", onStop as EventListener);
-      window.removeEventListener("openclaw-logo-carry-progress", onProgress as EventListener);
+      window.removeEventListener("nanobot-logo-drag-start", onStart as EventListener);
+      window.removeEventListener("nanobot-logo-drag-stop", onStop as EventListener);
+      window.removeEventListener("nanobot-logo-carry-progress", onProgress as EventListener);
     };
   }, []);
 
@@ -98,10 +98,10 @@ export function Sidebar() {
     };
     syncFromStorage();
     window.addEventListener("storage", syncFromStorage);
-    window.addEventListener("openclaw-bugs-config-change", syncFromStorage as EventListener);
+    window.addEventListener("nanobot-bugs-config-change", syncFromStorage as EventListener);
     return () => {
       window.removeEventListener("storage", syncFromStorage);
-      window.removeEventListener("openclaw-bugs-config-change", syncFromStorage as EventListener);
+      window.removeEventListener("nanobot-bugs-config-change", syncFromStorage as EventListener);
     };
   }, []);
 
@@ -109,14 +109,14 @@ export function Sidebar() {
     const next = !bugsEnabled;
     setBugsEnabled(next);
     localStorage.setItem(BUGS_ENABLED_KEY, String(next));
-    window.dispatchEvent(new CustomEvent("openclaw-bugs-config-change"));
+    window.dispatchEvent(new CustomEvent("nanobot-bugs-config-change"));
   };
 
   const onBugCountChange = (nextCount: number) => {
     const clamped = Math.max(0, Math.min(BUGS_MAX, nextCount));
     setBugsCount(clamped);
     localStorage.setItem(BUGS_COUNT_KEY, String(clamped));
-    window.dispatchEvent(new CustomEvent("openclaw-bugs-config-change"));
+    window.dispatchEvent(new CustomEvent("nanobot-bugs-config-change"));
   };
 
   useEffect(() => {
@@ -253,7 +253,7 @@ export function Sidebar() {
             >
               <span
                 className="relative inline-block leading-none transition-opacity duration-300"
-                data-openclaw-logo-anchor="true"
+                data-nanobot-logo-anchor="true"
                 onDragStart={handleLogoNativeDragStart}
                 draggable={false}
                 style={{
@@ -263,10 +263,10 @@ export function Sidebar() {
                   opacity: logoCarry.hidden ? 0 : 1,
                 }}
               >
-                🦞
+                🐈
               </span>
               <div className="min-w-0">
-                <div className="text-xs font-bold tracking-wide truncate">OPENCLAW</div>
+                <div className="text-xs font-bold tracking-wide truncate">NANOBOT</div>
                 <div className="text-[10px] text-[var(--text-muted)] truncate">
                   {pathname === "/" && mobileAgentCount !== null
                     ? `${mobileAgentCount} ${t("home.agentCount")}`
@@ -405,7 +405,7 @@ export function Sidebar() {
                     cursor: logoCursor,
                   }}
                 >
-                  🦞
+                  🐈
                 </span>
               </Link>
               <button
@@ -439,10 +439,10 @@ export function Sidebar() {
                       cursor: logoCursor,
                     }}
                   >
-                    🦞
+                    🐈
                   </span>
                   <div>
-                    <div className="text-sm font-bold text-[var(--text)] tracking-wide">OPENCLAW</div>
+                    <div className="text-sm font-bold text-[var(--text)] tracking-wide">NANOBOT</div>
                     <div className="text-[10px] text-[var(--text-muted)] tracking-wider">BOT DASHBOARD</div>
                   </div>
                 </Link>

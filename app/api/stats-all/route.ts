@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
 // 30秒内存缓存
 let statsCache: { data: any; ts: number } | null = null;
@@ -21,63 +21,78 @@ interface InternalDayStat extends DayStat {
   responseTimes: number[];
 }
 
+function getSessionsDirs(agentId: string): string[] {
+  const dirs = [
+    path.join(NANOBOT_HOME, `agents/${agentId}/sessions`),
+  ];
+  if (agentId === "main") {
+    dirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+  }
+  return dirs;
+}
+
 async function parseAgentSessions(agentId: string): Promise<InternalDayStat[]> {
-  const sessionsDir = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions`);
   const dayMap: Record<string, InternalDayStat> = {};
 
-  let fileNames: string[];
-  try {
-    fileNames = (await fs.promises.readdir(sessionsDir)).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
-  } catch { return []; }
+  for (const sessionsDir of getSessionsDirs(agentId)) {
+    let fileNames: string[];
+    try {
+      fileNames = (await fs.promises.readdir(sessionsDir)).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
+    } catch { continue; }
 
-  // 并行读取所有 JSONL 文件
-  const fileContents = await Promise.all(fileNames.map(async (file) => {
-    try { return await fs.promises.readFile(path.join(sessionsDir, file), "utf-8"); } catch { return null; }
-  }));
+    // 并行读取所有 JSONL 文件
+    const fileContents = await Promise.all(fileNames.map(async (file) => {
+      try { return await fs.promises.readFile(path.join(sessionsDir, file), "utf-8"); } catch { return null; }
+    }));
 
-  for (const content of fileContents) {
-    if (!content) continue;
+    for (const content of fileContents) {
+      if (!content) continue;
 
-    const lines = content.trim().split("\n");
-    const messages: { role: string; ts: string; stopReason?: string }[] = [];
+      const lines = content.trim().split("\n");
+      const messages: { role: string; ts: string; stopReason?: string }[] = [];
 
-    for (const line of lines) {
-      let entry: any;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (entry.type !== "message") continue;
-      const msg = entry.message;
-      if (!msg || !entry.timestamp) continue;
+      for (const line of lines) {
+        let entry: any;
+        try { entry = JSON.parse(line); } catch { continue; }
+        
+        // nanobot: skip metadata lines
+        if (entry._type === "metadata") continue;
+        
+        // nanobot: messages are at top level (no type:"message" wrapper)
+        const role = entry.role;
+        const ts = entry.timestamp;
+        if (!role || !ts) continue;
 
-      const ts = entry.timestamp;
-      const date = ts.slice(0, 10);
-      messages.push({ role: msg.role, ts, stopReason: msg.stopReason });
+        messages.push({ role, ts, stopReason: entry.stopReason });
 
-      if (msg.role === "assistant" && msg.usage) {
-        if (!dayMap[date]) {
-          dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
-        }
-        dayMap[date].inputTokens += msg.usage.input || 0;
-        dayMap[date].outputTokens += msg.usage.output || 0;
-        dayMap[date].totalTokens += msg.usage.totalTokens || 0;
-        dayMap[date].messageCount += 1;
-      }
-    }
-
-    // O(n) 响应时间计算：跟踪最近的 user 消息，匹配下一个 assistant stop
-    let lastUserTs: string | null = null;
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        lastUserTs = msg.ts;
-      } else if (msg.role === "assistant" && msg.stopReason === "stop" && lastUserTs) {
-        const diffMs = new Date(msg.ts).getTime() - new Date(lastUserTs).getTime();
-        if (diffMs > 0 && diffMs < 600000) {
-          const date = lastUserTs.slice(0, 10);
+        if (role === "assistant" && entry.usage) {
+          const date = ts.slice(0, 10);
           if (!dayMap[date]) {
             dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
           }
-          dayMap[date].responseTimes.push(diffMs);
+          dayMap[date].inputTokens += entry.usage.input || 0;
+          dayMap[date].outputTokens += entry.usage.output || 0;
+          dayMap[date].totalTokens += entry.usage.totalTokens || 0;
+          dayMap[date].messageCount += 1;
         }
-        lastUserTs = null;
+      }
+
+      // O(n) 响应时间计算：跟踪最近的 user 消息，匹配下一个 assistant
+      let lastUserTs: string | null = null;
+      for (const msg of messages) {
+        if (msg.role === "user") {
+          lastUserTs = msg.ts;
+        } else if (msg.role === "assistant" && lastUserTs) {
+          const diffMs = new Date(msg.ts).getTime() - new Date(lastUserTs).getTime();
+          if (diffMs > 0 && diffMs < 600000) {
+            const date = lastUserTs.slice(0, 10);
+            if (!dayMap[date]) {
+              dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
+            }
+            dayMap[date].responseTimes.push(diffMs);
+          }
+          lastUserTs = null;
+        }
       }
     }
   }
@@ -122,9 +137,14 @@ export async function GET() {
   }
 
   try {
-    const agentsDir = path.join(OPENCLAW_HOME, "agents");
+    const agentsDir = path.join(NANOBOT_HOME, "agents");
     let agentIds: string[];
     try { agentIds = fs.readdirSync(agentsDir).filter(f => fs.statSync(path.join(agentsDir, f)).isDirectory()); } catch { agentIds = []; }
+
+    // Also include "main" if not already found (for workspace sessions)
+    if (!agentIds.includes("main")) {
+      agentIds.push("main");
+    }
 
     // 并行处理所有 agent
     const allAgentDays = await Promise.all(agentIds.map(id => parseAgentSessions(id)));

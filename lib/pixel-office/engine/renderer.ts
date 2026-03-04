@@ -390,7 +390,7 @@ export function renderScene(
           c.textAlign = 'center'
           c.textBaseline = 'middle'
           c.font = `${Math.max(14, Math.round(9 * zoom))}px serif`
-          c.fillText('🦞', 0, 0)
+          c.fillText('🐈', 0, 0)
           c.restore()
         },
       })

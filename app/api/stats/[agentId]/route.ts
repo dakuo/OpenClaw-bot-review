@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
 interface DayStat {
   date: string; // YYYY-MM-DD
@@ -14,70 +14,80 @@ interface DayStat {
   responseTimes: number[]; // internal, stripped before response
 }
 
+function getSessionsDirs(agentId: string): string[] {
+  const dirs = [path.join(NANOBOT_HOME, `agents/${agentId}/sessions`)];
+  if (agentId === "main") {
+    dirs.push(path.join(NANOBOT_HOME, "workspace/sessions"));
+  }
+  return dirs;
+}
+
 function parseSessions(agentId: string): Omit<DayStat, "responseTimes">[] {
-  const sessionsDir = path.join(OPENCLAW_HOME, `agents/${agentId}/sessions`);
   const dayMap: Record<string, DayStat> = {};
 
-  // Find all JSONL files (skip deleted ones)
-  let files: string[];
-  try {
-    files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
-  } catch {
-    return [];
-  }
-
-  for (const file of files) {
-    const filePath = path.join(sessionsDir, file);
-    let content: string;
+  for (const sessionsDir of getSessionsDirs(agentId)) {
+    // Find all JSONL files (skip deleted ones)
+    let files: string[];
     try {
-      content = fs.readFileSync(filePath, "utf-8");
-    } catch { continue; }
-
-    const lines = content.trim().split("\n");
-    // Collect messages for response time calculation
-    const messages: { role: string; ts: string; stopReason?: string }[] = [];
-
-    for (const line of lines) {
-      let entry: any;
-      try { entry = JSON.parse(line); } catch { continue; }
-
-      if (entry.type !== "message") continue;
-      const msg = entry.message;
-      if (!msg || !entry.timestamp) continue;
-
-      const ts = entry.timestamp;
-      const date = ts.slice(0, 10); // YYYY-MM-DD from ISO string
-
-      messages.push({ role: msg.role, ts, stopReason: msg.stopReason });
-
-      if (msg.role === "assistant" && msg.usage) {
-        if (!dayMap[date]) {
-          dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
-        }
-        const day = dayMap[date];
-        day.inputTokens += msg.usage.input || 0;
-        day.outputTokens += msg.usage.output || 0;
-        day.totalTokens += msg.usage.totalTokens || 0;
-        day.messageCount += 1;
-      }
+      files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
+    } catch {
+      continue;
     }
 
-    // Calculate response times: user msg → next assistant msg with stopReason=stop
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role !== "user") continue;
-      for (let j = i + 1; j < messages.length; j++) {
-        if (messages[j].role === "assistant" && messages[j].stopReason === "stop") {
-          const userTs = new Date(messages[i].ts).getTime();
-          const assistTs = new Date(messages[j].ts).getTime();
-          const diffMs = assistTs - userTs;
-          if (diffMs > 0 && diffMs < 600000) { // cap at 10 min
-            const date = messages[i].ts.slice(0, 10);
-            if (!dayMap[date]) {
-              dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
-            }
-            dayMap[date].responseTimes.push(diffMs);
+    for (const file of files) {
+      const filePath = path.join(sessionsDir, file);
+      let content: string;
+      try {
+        content = fs.readFileSync(filePath, "utf-8");
+      } catch { continue; }
+
+      const lines = content.trim().split("\n");
+      // Collect messages for response time calculation
+      const messages: { role: string; ts: string; stopReason?: string }[] = [];
+
+      for (const line of lines) {
+        let entry: any;
+        try { entry = JSON.parse(line); } catch { continue; }
+
+        // nanobot: skip metadata, messages are at top level
+        if (entry._type === "metadata") continue;
+        const role = entry.role;
+        const ts = entry.timestamp;
+        if (!role || !ts) continue;
+
+        const date = ts.slice(0, 10); // YYYY-MM-DD from ISO string
+
+        messages.push({ role, ts, stopReason: entry.stopReason });
+
+        if (role === "assistant" && entry.usage) {
+          if (!dayMap[date]) {
+            dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
           }
-          break;
+          const day = dayMap[date];
+          day.inputTokens += entry.usage.input || 0;
+          day.outputTokens += entry.usage.output || 0;
+          day.totalTokens += entry.usage.totalTokens || 0;
+          day.messageCount += 1;
+        }
+      }
+
+      // Calculate response times: user msg → next assistant msg
+      for (let i = 0; i < messages.length; i++) {
+        if (messages[i].role !== "user") continue;
+        for (let j = i + 1; j < messages.length; j++) {
+          if (messages[j].role === "assistant") {
+            const userTs = new Date(messages[i].ts).getTime();
+            const assistTs = new Date(messages[j].ts).getTime();
+            const diffMs = assistTs - userTs;
+            if (diffMs > 0 && diffMs < 600000) { // cap at 10 min
+              const date = messages[i].ts.slice(0, 10);
+              if (!dayMap[date]) {
+                dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
+              }
+              dayMap[date].responseTimes.push(diffMs);
+            }
+            break;
+          }
         }
       }
     }

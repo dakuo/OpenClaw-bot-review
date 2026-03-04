@@ -2,19 +2,17 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
 
 export async function GET() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
-    const port = config.gateway?.port || 18789;
-    const token = config.gateway?.auth?.token || "";
+    const port = config.gateway?.port || 18790;
 
     const url = `http://localhost:${port}/api/health`;
     const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -27,7 +25,7 @@ export async function GET() {
     }
 
     const data = await resp.json().catch(() => null);
-    return NextResponse.json({ ok: true, data, webUrl: `http://localhost:${port}/chat${token ? '?token=' + encodeURIComponent(token) : ''}` });
+    return NextResponse.json({ ok: true, data, webUrl: `http://localhost:${port}/chat` });
   } catch (err: any) {
     const msg = err.cause?.code === "ECONNREFUSED"
       ? "Gateway 未运行"

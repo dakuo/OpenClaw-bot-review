@@ -5,8 +5,8 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
 
 interface ProbeResult {
   provider?: string;
@@ -54,7 +54,7 @@ function parseJsonFromMixedOutput(output: string): any {
       }
     }
   }
-  throw new Error("Failed to parse JSON output from openclaw models status --probe --json");
+  throw new Error("Failed to parse JSON output from nanobot models status --probe --json");
 }
 
 export async function POST() {
@@ -67,20 +67,19 @@ export async function POST() {
       ? defaults.model
       : defaults.model?.primary || "unknown";
 
-    let agentList = config.agents?.list || [];
-    if (agentList.length === 0) {
-      try {
-        const agentsDir = path.join(OPENCLAW_HOME, "agents");
-        const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-        agentList = dirs
-          .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
-          .map((d: any) => ({ id: d.name }));
-      } catch {}
-      if (agentList.length === 0) agentList = [{ id: "main" }];
-    }
+    // nanobot: auto-discover agents
+    let agentList: any[] = [];
+    try {
+      const agentsDir = path.join(NANOBOT_HOME, "agents");
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      agentList = dirs
+        .filter((d: any) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d: any) => ({ id: d.name }));
+    } catch {}
+    if (agentList.length === 0) agentList = [{ id: "main" }];
 
     const { stdout, stderr } = await execFileAsync(
-      "openclaw",
+      "nanobot",
       ["models", "status", "--probe", "--json"],
       {
         maxBuffer: 10 * 1024 * 1024,
@@ -115,7 +114,7 @@ export async function POST() {
         agentId: agent.id,
         model: modelStr,
         ok,
-        text: ok ? "OK (openclaw models status --probe)" : undefined,
+        text: ok ? "OK (nanobot models status --probe)" : undefined,
         error: ok ? undefined : (matched.error || `Probe status: ${matched.status || "unknown"}`),
         elapsed: matched.latencyMs || 0,
       };

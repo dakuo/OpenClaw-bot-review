@@ -6,8 +6,8 @@ import { AlertMonitor } from "./alert-monitor";
 import { GlobalBugsOverlay } from "./global-bugs-overlay";
 
 export const metadata: Metadata = {
-  title: "OpenClaw Bot Dashboard",
-  description: "查看所有 OpenClaw 机器人配置",
+  title: "nanobot Dashboard",
+  description: "Monitor all your nanobot Bots/Agents/Sessions at a glance",
 };
 
 export const viewport: Viewport = {
@@ -17,7 +17,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <body>
         <Providers>
           <AlertMonitor />

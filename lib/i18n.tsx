@@ -7,8 +7,8 @@ export type Locale = "zh" | "en";
 const translations: Record<Locale, Record<string, string>> = {
   zh: {
     // layout
-    "site.title": "OpenClaw Bot Dashboard",
-    "site.desc": "查看所有 OpenClaw 机器人配置",
+    "site.title": "nanobot Dashboard",
+    "site.desc": "查看所有 nanobot 机器人配置",
 
     // nav sidebar
     "nav.overview": "总览",
@@ -59,9 +59,9 @@ const translations: Record<Locale, Record<string, string>> = {
     "common.minutes": "分钟",
 
     // home page
-    "home.title": "🐾 OpenClaw Bot Dashboard",
+    "home.title": "🐈 nanobot Dashboard",
     "home.agentCount": "个机器人",
-    "home.pageTitle": "OpenClaw 机器人",
+    "home.pageTitle": "nanobot 机器人",
     "home.defaultModel": "默认模型",
     "home.viewModels": "查看模型列表 →",
     "home.skillMgmt": "🧩 技能管理",
@@ -131,7 +131,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "refresh.10m": "10 分钟",
 
     // models page
-    "models.title": "OpenClaw接入模型列表",
+    "models.title": "nanobot 接入模型列表",
     "models.providerCount": "个 Provider",
     "models.totalPrefix": "共",
     "models.testAll": "🧪 测试全部模型",
@@ -221,7 +221,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "gateway.fetchError": "无法检查 Gateway 状态",
 
     // pixel office
-    "pixelOffice.title": "OpenClaw Agents办公室",
+    "pixelOffice.title": "nanobot 办公室",
     "pixelOffice.editMode": "编辑布局",
     "pixelOffice.exitEdit": "退出编辑",
     "pixelOffice.save": "保存",
@@ -245,8 +245,8 @@ const translations: Record<Locale, Record<string, string>> = {
   },
   en: {
     // layout
-    "site.title": "OpenClaw Bot Dashboard",
-    "site.desc": "View all OpenClaw bot configurations",
+    "site.title": "nanobot Dashboard",
+    "site.desc": "Monitor all your nanobot bots and agents",
 
     // nav sidebar
     "nav.overview": "Overview",
@@ -297,9 +297,9 @@ const translations: Record<Locale, Record<string, string>> = {
     "common.minutes": "minutes",
 
     // home page
-    "home.title": "🐾 OpenClaw Bot Dashboard",
+    "home.title": "🐈 nanobot Dashboard",
     "home.agentCount": "bots",
-    "home.pageTitle": "OpenClaw Bots",
+    "home.pageTitle": "nanobot Agents",
     "home.defaultModel": "Default model",
     "home.viewModels": "View Models →",
     "home.skillMgmt": "🧩 Skills",
@@ -369,7 +369,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "refresh.10m": "10 min",
 
     // models page
-    "models.title": "OpenClaw Model List",
+    "models.title": "nanobot Model List",
     "models.providerCount": "Providers",
     "models.totalPrefix": "",
     "models.testAll": "🧪 Test All Models",
@@ -459,7 +459,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "gateway.fetchError": "Cannot check Gateway status",
 
     // pixel office
-    "pixelOffice.title": "OpenClaw Agents Office",
+    "pixelOffice.title": "nanobot Agents Office",
     "pixelOffice.editMode": "Edit Layout",
     "pixelOffice.exitEdit": "Exit Edit",
     "pixelOffice.save": "Save",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const REPO = process.env.OPENCLAW_REPO || "openclaw/openclaw";
+const REPO = process.env.NANOBOT_REPO || "nanobot/nanobot";
 
 // Server-side cache: 1h TTL
 let cache: { data: any; ts: number } | null = null;

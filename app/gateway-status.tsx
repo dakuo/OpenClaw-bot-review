@@ -60,9 +60,9 @@ export function GatewayStatus({ compact = false, className = "", hideIconOnMobil
         {compact ? "GW" : hideIconOnMobile ? (
           <>
             <span className="md:hidden">Gateway</span>
-            <span className="hidden md:inline">🦞 Gateway</span>
+            <span className="hidden md:inline">🐈 Gateway</span>
           </>
-        ) : "🦞 Gateway"}
+        ) : "🐈 Gateway"}
         <span className="opacity-50 text-[10px]">↗</span>
       </a>
       {!health ? (

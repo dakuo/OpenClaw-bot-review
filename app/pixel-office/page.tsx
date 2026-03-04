@@ -328,9 +328,9 @@ export default function PixelOfficePage() {
   }, [agents])
 
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('openclaw-logo-drag-start'))
+    window.dispatchEvent(new CustomEvent('nanobot-logo-drag-start'))
     return () => {
-      window.dispatchEvent(new CustomEvent('openclaw-logo-drag-stop'))
+      window.dispatchEvent(new CustomEvent('nanobot-logo-drag-stop'))
     }
   }, [])
 
@@ -1681,7 +1681,7 @@ export default function PixelOfficePage() {
             <div className={modalOverlayClass} onClick={() => setShowPhonePanel(false)}>
               <div className={modalPanelClass("w-80")} onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="font-semibold text-[var(--text)]">📱 OpenClaw Latest</span>
+                  <span className="font-semibold text-[var(--text)]">📱 nanobot Latest</span>
                   <button onClick={() => setShowPhonePanel(false)} className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none">×</button>
                 </div>
                 {!info && versionLoading ? (

@@ -14,7 +14,7 @@ interface ProbeResult {
 }
 
 function parseJsonFromMixedOutput(output: string): any {
-  // `openclaw models status --json` may print warnings/logs before JSON.
+  // `nanobot models status --json` may print warnings/logs before JSON.
   for (let i = 0; i < output.length; i++) {
     if (output[i] !== "{") continue;
     let depth = 0;
@@ -46,7 +46,7 @@ function parseJsonFromMixedOutput(output: string): any {
       }
     }
   }
-  throw new Error("Failed to parse JSON output from openclaw models status --probe --json");
+  throw new Error("Failed to parse JSON output from nanobot models status --probe --json");
 }
 
 export async function POST(req: Request) {
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
 
     const startedAt = Date.now();
     const { stdout, stderr } = await execFileAsync(
-      "openclaw",
+      "nanobot",
       ["models", "status", "--probe", "--json", "--probe-provider", String(providerId)],
       {
         maxBuffer: 10 * 1024 * 1024,
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
       mode: matched.mode || "unknown",
       status: matched.status || "unknown",
       error,
-      text: ok ? "OK (openclaw models status --probe)" : undefined,
+      text: ok ? "OK (nanobot models status --probe)" : undefined,
     });
   } catch (err: any) {
     return NextResponse.json(

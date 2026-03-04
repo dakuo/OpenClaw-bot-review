@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = path.join(process.env.HOME || "/root", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const NANOBOT_HOME = path.join(process.env.HOME || "/root", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
 
 export async function POST(req: Request) {
   try {
@@ -12,27 +12,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing sessionKey or agentId" }, { status: 400 });
     }
 
-    // Read gateway config
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
-    const gatewayPort = config.gateway?.port || 18789;
-    const gatewayToken = config.gateway?.auth?.token || "";
+    const gatewayPort = config.gateway?.port || 18790;
 
     const startTime = Date.now();
 
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${gatewayToken}`,
-        "x-openclaw-agent-id": agentId,
-        "x-openclaw-session-key": sessionKey,
+        "x-nanobot-agent-id": agentId,
+        "x-nanobot-session-key": sessionKey,
       };
 
       const resp = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: `openclaw:${agentId}`,
+          model: `nanobot:${agentId}`,
           messages: [{ role: "user", content: "Health check: reply with OK" }],
           max_tokens: 64,
         }),

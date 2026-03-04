@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-// 配置文件路径：优先使用 OPENCLAW_HOME 环境变量，否则默认 ~/.openclaw
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
-const OPENCLAW_DIR = OPENCLAW_HOME;
+// 配置文件路径：优先使用 NANOBOT_HOME 环境变量，否则默认 ~/.nanobot
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
+const NANOBOT_DIR = NANOBOT_HOME;
 
 // 30秒内存缓存
 let configCache: { data: any; ts: number } | null = null;
@@ -25,9 +25,19 @@ interface SessionStatus {
   weeklyTokens: number[]; // 过去7天每天的token用量
 }
 
+function getSessionsDirs(agentId: string): string[] {
+  const dirs = [
+    path.join(NANOBOT_DIR, `agents/${agentId}/sessions`),
+  ];
+  // For main agent, also check workspace sessions
+  if (agentId === "main") {
+    dirs.push(path.join(NANOBOT_DIR, "workspace/sessions"));
+  }
+  return dirs;
+}
+
 function getAgentSessionStatus(agentId: string): SessionStatus {
   const result: SessionStatus = { lastActive: null, totalTokens: 0, contextTokens: 0, sessionCount: 0, todayAvgResponseMs: 0, messageCount: 0, weeklyResponseMs: [], weeklyTokens: [] };
-  const sessionsDir = path.join(OPENCLAW_DIR, `agents/${agentId}/sessions`);
   
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   
@@ -41,81 +51,100 @@ function getAgentSessionStatus(agentId: string): SessionStatus {
   const dailyTokens: Record<string, number> = {};
   for (const d of weekDates) { dailyResponseTimes[d] = []; dailyTokens[d] = 0; }
   
-  let files: string[];
-  try {
-    const allFiles = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
-    // 只读最近7天修改过的文件
-    const cutoff = Date.now() - 7 * 86400000;
-    files = allFiles.filter(f => {
-      try { return fs.statSync(path.join(sessionsDir, f)).mtimeMs >= cutoff; } catch { return false; }
-    });
-  } catch { return result; }
-
   // 使用 Set 来统计唯一的 session
   const sessionKeys = new Set<string>();
+  let totalFiles = 0;
 
-  for (const file of files) {
-    const filePath = path.join(sessionsDir, file);
-    let content: string;
-    try { content = fs.readFileSync(filePath, "utf-8"); } catch { continue; }
+  for (const sessionsDir of getSessionsDirs(agentId)) {
+    let files: string[];
+    try {
+      const allFiles = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl") && !f.includes(".deleted."));
+      // 只读最近7天修改过的文件
+      const cutoff = Date.now() - 7 * 86400000;
+      files = allFiles.filter(f => {
+        try { return fs.statSync(path.join(sessionsDir, f)).mtimeMs >= cutoff; } catch { return false; }
+      });
+    } catch { continue; }
 
-    const lines = content.trim().split("\n");
-    const messages: { role: string; ts: string; stopReason?: string }[] = [];
-    
-    for (const line of lines) {
-      let entry: any;
-      try { entry = JSON.parse(line); } catch { continue; }
+    totalFiles += files.length;
+
+    for (const file of files) {
+      const filePath = path.join(sessionsDir, file);
+      let content: string;
+      try { content = fs.readFileSync(filePath, "utf-8"); } catch { continue; }
+
+      const lines = content.trim().split("\n");
+      const messages: { role: string; ts: string; stopReason?: string }[] = [];
       
-      // 统计 session 数量（从 session key 或 message 中的 sessionKey）
-      if (entry.sessionKey) {
-        sessionKeys.add(entry.sessionKey);
-      }
-      
-      // 解析 token 用量 - 从 assistant 消息的 usage 中获取
-      if (entry.type === "message" && entry.message) {
-        const msg = entry.message;
-        if (msg.role === "assistant" && msg.usage) {
-          result.totalTokens += msg.usage.input || 0;
-          result.totalTokens += msg.usage.output || 0;
-          result.messageCount += 1;
-          // 按天统计 token
-          if (entry.timestamp) {
-            const msgDate = entry.timestamp.slice(0, 10);
-            if (dailyTokens[msgDate] !== undefined) {
-              dailyTokens[msgDate] += (msg.usage.input || 0) + (msg.usage.output || 0);
+      for (const line of lines) {
+        let entry: any;
+        try { entry = JSON.parse(line); } catch { continue; }
+        
+        // Skip metadata lines
+        if (entry._type === "metadata") {
+          if (entry.key) sessionKeys.add(entry.key);
+          continue;
+        }
+        
+        // 统计 session 数量（从 session key 或 message 中的 sessionKey）
+        if (entry.sessionKey) {
+          sessionKeys.add(entry.sessionKey);
+        }
+        
+        // nanobot: messages are at top level (no type:"message" wrapper)
+        const role = entry.role;
+        const timestamp = entry.timestamp;
+        
+        if (role === "assistant") {
+          // Parse usage if present
+          if (entry.usage) {
+            result.totalTokens += entry.usage.input || 0;
+            result.totalTokens += entry.usage.output || 0;
+            result.messageCount += 1;
+            // 按天统计 token
+            if (timestamp) {
+              const msgDate = timestamp.slice(0, 10);
+              if (dailyTokens[msgDate] !== undefined) {
+                dailyTokens[msgDate] += (entry.usage.input || 0) + (entry.usage.output || 0);
+              }
             }
+          } else {
+            // Count message even without usage
+            result.messageCount += 1;
           }
         }
+        
         // 更新最近活跃时间
-        if (entry.timestamp) {
-          const ts = new Date(entry.timestamp).getTime();
+        if (timestamp && role) {
+          const ts = new Date(timestamp).getTime();
           if (!result.lastActive || ts > result.lastActive) {
             result.lastActive = ts;
           }
-          messages.push({ role: msg.role, ts: entry.timestamp, stopReason: msg.stopReason });
+          messages.push({ role, ts: timestamp, stopReason: entry.stopReason });
         }
       }
-    }
-    
-    // O(n) 响应时间计算：跟踪最近的 user 消息，匹配下一个 assistant stop
-    let lastUserTs: string | null = null;
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        lastUserTs = msg.ts;
-      } else if (msg.role === "assistant" && msg.stopReason === "stop" && lastUserTs) {
-        const msgDate = lastUserTs.slice(0, 10);
-        if (dailyResponseTimes[msgDate]) {
-          const diffMs = new Date(msg.ts).getTime() - new Date(lastUserTs).getTime();
-          if (diffMs > 0 && diffMs < 600000) {
-            dailyResponseTimes[msgDate].push(diffMs);
+      
+      // O(n) 响应时间计算：跟踪最近的 user 消息，匹配下一个 assistant stop
+      let lastUserTs: string | null = null;
+      for (const msg of messages) {
+        if (msg.role === "user") {
+          lastUserTs = msg.ts;
+        } else if (msg.role === "assistant" && lastUserTs) {
+          // nanobot may not have stopReason, treat any assistant message as a response
+          const msgDate = lastUserTs.slice(0, 10);
+          if (dailyResponseTimes[msgDate]) {
+            const diffMs = new Date(msg.ts).getTime() - new Date(lastUserTs).getTime();
+            if (diffMs > 0 && diffMs < 600000) {
+              dailyResponseTimes[msgDate].push(diffMs);
+            }
           }
+          lastUserTs = null;
         }
-        lastUserTs = null;
       }
     }
   }
   
-  result.sessionCount = sessionKeys.size || files.length; // 降级为文件数
+  result.sessionCount = sessionKeys.size || totalFiles; // 降级为文件数
   const todayTimes = dailyResponseTimes[today] || [];
   if (todayTimes.length > 0) {
     result.todayAvgResponseMs = Math.round(todayTimes.reduce((a, b) => a + b, 0) / todayTimes.length);
@@ -139,15 +168,56 @@ interface GroupChat {
 function getGroupChats(agentIds: string[], agentMap: Record<string, { emoji: string; name: string }>, feishuAgentIds: string[], sessionsMap: Map<string, any>): GroupChat[] {
   const groupAgents: Record<string, { agents: Set<string>; channel: string }> = {};
   for (const agentId of agentIds) {
+    // Scan session JSONL files for group session metadata
+    for (const sessionsDir of getSessionsDirs(agentId)) {
+      try {
+        const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".jsonl"));
+        for (const file of files) {
+          try {
+            const content = fs.readFileSync(path.join(sessionsDir, file), "utf-8");
+            const firstLine = content.split("\n")[0];
+            const meta = JSON.parse(firstLine);
+            if (meta._type !== "metadata" || !meta.key) continue;
+            const key = meta.key;
+            
+            const feishuGroup = key.match(/^(?:agent:[^:]+:)?feishu:group:(.+)$/);
+            const discordGroup = key.match(/^(?:agent:[^:]+:)?discord:channel:(.+)$/);
+            const telegramGroup = key.match(/^(?:agent:[^:]+:)?telegram:group:(.+)$/);
+            const whatsappGroup = key.match(/^(?:agent:[^:]+:)?whatsapp:group:(.+)$/);
+            if (feishuGroup) {
+              const gid = `feishu:${feishuGroup[1]}`;
+              if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "feishu" };
+              groupAgents[gid].agents.add(agentId);
+            }
+            if (discordGroup) {
+              const gid = `discord:${discordGroup[1]}`;
+              if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "discord" };
+              groupAgents[gid].agents.add(agentId);
+            }
+            if (telegramGroup) {
+              const gid = `telegram:${telegramGroup[1]}`;
+              if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "telegram" };
+              groupAgents[gid].agents.add(agentId);
+            }
+            if (whatsappGroup) {
+              const gid = `whatsapp:${whatsappGroup[1]}`;
+              if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "whatsapp" };
+              groupAgents[gid].agents.add(agentId);
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // Also check sessions.json (legacy/compat)
     try {
       const sessions = sessionsMap.get(agentId);
       if (!sessions) continue;
       for (const key of Object.keys(sessions)) {
-        // 匹配群聊 session: agent:{id}:feishu:group:{groupId} 或 agent:{id}:discord:channel:{channelId}
-        const feishuGroup = key.match(/^agent:[^:]+:feishu:group:(.+)$/);
-        const discordGroup = key.match(/^agent:[^:]+:discord:channel:(.+)$/);
-        const telegramGroup = key.match(/^agent:[^:]+:telegram:group:(.+)$/);
-        const whatsappGroup = key.match(/^agent:[^:]+:whatsapp:group:(.+)$/);
+        const feishuGroup = key.match(/^(?:agent:[^:]+:)?feishu:group:(.+)$/);
+        const discordGroup = key.match(/^(?:agent:[^:]+:)?discord:channel:(.+)$/);
+        const telegramGroup = key.match(/^(?:agent:[^:]+:)?telegram:group:(.+)$/);
+        const whatsappGroup = key.match(/^(?:agent:[^:]+:)?whatsapp:group:(.+)$/);
         if (feishuGroup) {
           const gid = `feishu:${feishuGroup[1]}`;
           if (!groupAgents[gid]) groupAgents[gid] = { agents: new Set(), channel: "feishu" };
@@ -181,7 +251,7 @@ function getGroupChats(agentIds: string[], agentMap: Record<string, { emoji: str
     }));
 }
 
-// 从 OpenClaw sessions 文件获取每个 agent 最近活跃的飞书 DM session 的用户 open_id
+// 从 nanobot sessions 文件获取每个 agent 最近活跃的飞书 DM session 的用户 open_id
 function getFeishuUserOpenIds(agentIds: string[], sessionsMap: Map<string, any>): Record<string, string> {
   const map: Record<string, string> = {};
   for (const agentId of agentIds) {
@@ -190,7 +260,7 @@ function getFeishuUserOpenIds(agentIds: string[], sessionsMap: Map<string, any>)
       if (!sessions) continue;
       let best: { openId: string; updatedAt: number } | null = null;
       for (const [key, val] of Object.entries(sessions)) {
-        const m = key.match(/^agent:[^:]+:feishu:direct:(ou_[a-f0-9]+)$/);
+        const m = key.match(/(?:^agent:[^:]+:)?feishu:direct:(ou_[a-f0-9]+)$/);
         if (m) {
           const updatedAt = (val as any).updatedAt || 0;
           if (!best || updatedAt > best.updatedAt) {
@@ -210,7 +280,7 @@ function getChannelDirectPeerIds(
   channel: "telegram" | "whatsapp"
 ): Record<string, string> {
   const map: Record<string, string> = {};
-  const pattern = new RegExp(`^agent:[^:]+:${channel}:direct:(.+)$`);
+  const pattern = new RegExp(`(?:^agent:[^:]+:)?${channel}:direct:(.+)$`);
   for (const agentId of agentIds) {
     try {
       const sessions = sessionsMap.get(agentId);
@@ -235,10 +305,9 @@ function readIdentityName(agentId: string, agentDir?: string, workspace?: string
   const candidates = [
     agentDir ? path.join(agentDir, "IDENTITY.md") : null,
     workspace ? path.join(workspace, "IDENTITY.md") : null,
-    path.join(OPENCLAW_DIR, `agents/${agentId}/agent/IDENTITY.md`),
-    path.join(OPENCLAW_DIR, `workspace-${agentId}/IDENTITY.md`),
-    // 只有 main agent 才 fallback 到默认 workspace
-    agentId === "main" ? path.join(OPENCLAW_DIR, `workspace/IDENTITY.md`) : null,
+    path.join(NANOBOT_DIR, `agents/${agentId}/IDENTITY.md`),
+    // nanobot: workspace IDENTITY.md for main agent
+    agentId === "main" ? path.join(NANOBOT_DIR, "workspace/IDENTITY.md") : null,
   ].filter(Boolean) as string[];
 
   for (const p of candidates) {
@@ -295,49 +364,47 @@ export async function GET() {
       return fb || "unknown";
     };
 
-    let agentList = config.agents?.list || [];
-    const bindings = config.bindings || [];
-    const channels = config.channels || {};
-    const feishuAccounts = channels.feishu?.accounts || {};
-
-    // Auto-discover agents from ~/.openclaw/agents/ when agents.list is empty
+    // nanobot: no agents.list — auto-discover from ~/.nanobot/agents/ directories
+    let agentList: any[] = [];
+    try {
+      const agentsDir = path.join(NANOBOT_DIR, "agents");
+      const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
+      agentList = dirs
+        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d) => ({ id: d.name }));
+    } catch {}
+    // If still empty, at least include "main"
     if (agentList.length === 0) {
-      try {
-        const agentsDir = path.join(OPENCLAW_DIR, "agents");
-        const dirs = fs.readdirSync(agentsDir, { withFileTypes: true });
-        agentList = dirs
-          .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-          .map((d) => ({ id: d.name }));
-      } catch {}
-      // If still empty, at least include "main"
-      if (agentList.length === 0) {
-        agentList = [{ id: "main" }];
-      }
+      agentList = [{ id: "main" }];
     }
+
+    const channels = config.channels || {};
 
     // 一次性读取所有 agent 的 sessions.json，避免重复读取
     const agentIds = agentList.map((a: any) => a.id);
     const sessionsMap = new Map<string, any>();
     for (const agentId of agentIds) {
-      try {
-        const sessionsPath = path.join(OPENCLAW_DIR, `agents/${agentId}/sessions/sessions.json`);
-        const raw = fs.readFileSync(sessionsPath, "utf-8");
-        sessionsMap.set(agentId, JSON.parse(raw));
-      } catch {}
+      // Try multiple session index locations
+      const candidates = [
+        path.join(NANOBOT_DIR, `agents/${agentId}/sessions/sessions.json`),
+      ];
+      if (agentId === "main") {
+        candidates.push(path.join(NANOBOT_DIR, "workspace/sessions/sessions.json"));
+      }
+      for (const sessionsPath of candidates) {
+        try {
+          const raw = fs.readFileSync(sessionsPath, "utf-8");
+          const existing = sessionsMap.get(agentId) || {};
+          sessionsMap.set(agentId, { ...existing, ...JSON.parse(raw) });
+        } catch {}
+      }
     }
 
     // 从预读的 sessions 数据获取飞书用户 open_id
     const feishuUserOpenIds = getFeishuUserOpenIds(agentIds, sessionsMap);
     const telegramDirectPeerIds = getChannelDirectPeerIds(agentIds, sessionsMap, "telegram");
     const whatsappDirectPeerIds = getChannelDirectPeerIds(agentIds, sessionsMap, "whatsapp");
-    const discordDmAllowFrom = channels.discord?.dm?.allowFrom || [];
-
-    // Build a set of agent IDs that have explicit feishu bindings
-    const boundFeishuAgentIds = new Set(
-      bindings
-        .filter((b: any) => b.match?.channel === "feishu")
-        .map((b: any) => b.agentId)
-    );
+    const discordDmAllowFrom = channels.discord?.allowFrom || channels.discord?.dm?.allowFrom || [];
 
     // 构建 agent 详情
     const agents = await Promise.all(agentList.map(async (agent: any) => {
@@ -345,74 +412,41 @@ export async function GET() {
       const identityName = readIdentityName(id, agent.agentDir, agent.workspace);
       const name = identityName || agent.name || id;
       const emoji = agent.identity?.emoji || "🤖";
+      // nanobot: use defaults.model for main agent
       const model = normalizeModelRef(agent.model, defaultModel);
 
-      // 查找绑定的平台
+      // 查找绑定的平台 — nanobot binds channels directly in config.channels
       const platforms: { name: string; accountId?: string; appId?: string; botOpenId?: string; botUserId?: string }[] = [];
 
-      // 检查飞书绑定 (explicit binding)
-      const feishuBinding = bindings.find(
-        (b: any) => b.agentId === id && b.match?.channel === "feishu"
-      );
-      if (feishuBinding) {
-        const accountId = feishuBinding.match?.accountId || id;
-        const acc = feishuAccounts[accountId];
-        const appId = acc?.appId;
-        const userOpenId = feishuUserOpenIds[id] || null;
-        platforms.push({ name: "feishu", accountId, appId, ...(userOpenId && { botOpenId: userOpenId }) });
-      }
-
-      // If no explicit binding, check if there's a feishu account matching this agent id
-      if (!feishuBinding && feishuAccounts[id]) {
-        const acc = feishuAccounts[id];
-        const appId = acc?.appId;
-        const userOpenId = feishuUserOpenIds[id] || null;
-        platforms.push({ name: "feishu", accountId: id, appId, ...(userOpenId && { botOpenId: userOpenId }) });
-      }
-
-      // main agent 特殊处理：默认绑定所有未显式绑定的 channel
-      if (id === "main") {
-        const hasFeishu = platforms.some((p) => p.name === "feishu");
-        if (!hasFeishu && channels.feishu && channels.feishu.enabled !== false) {
-          // main gets feishu if channel is configured and not explicitly disabled
-          const acc = feishuAccounts["main"];
-          const appId = acc?.appId || channels.feishu?.appId;
-          const userOpenId = feishuUserOpenIds["main"] || null;
+      // nanobot: channels are bound directly, no bindings array
+      // For feishu: check if channel is enabled
+      if (channels.feishu && channels.feishu.enabled !== false) {
+        if (id === "main") {
+          const appId = channels.feishu.appId;
+          const userOpenId = feishuUserOpenIds[id] || null;
           platforms.push({ name: "feishu", accountId: "main", appId, ...(userOpenId && { botOpenId: userOpenId }) });
         }
-        if (channels.discord && channels.discord.enabled !== false) {
+      }
+
+      // For discord
+      if (channels.discord && channels.discord.enabled !== false) {
+        if (id === "main") {
           const botUserId = discordDmAllowFrom[0] || null;
           platforms.push({ name: "discord", ...(botUserId && { botUserId }) });
         }
-        if (channels.telegram && channels.telegram.enabled !== false) {
+      }
+
+      // For telegram
+      if (channels.telegram && channels.telegram.enabled !== false) {
+        if (id === "main") {
           const botUserId = telegramDirectPeerIds[id] || null;
           platforms.push({ name: "telegram", ...(botUserId && { botUserId }) });
-        }
-        if (channels.whatsapp && channels.whatsapp.enabled !== false) {
-          const botUserId = whatsappDirectPeerIds[id] || null;
-          platforms.push({ name: "whatsapp", ...(botUserId && { botUserId }) });
         }
       }
 
-      // Also detect discord for non-main agents if they have discord bindings
-      if (id !== "main") {
-        const discordBinding = bindings.find(
-          (b: any) => b.agentId === id && b.match?.channel === "discord"
-        );
-        if (discordBinding) {
-          platforms.push({ name: "discord" });
-        }
-        const telegramBinding = bindings.find(
-          (b: any) => b.agentId === id && b.match?.channel === "telegram"
-        );
-        if (telegramBinding) {
-          const botUserId = telegramDirectPeerIds[id] || null;
-          platforms.push({ name: "telegram", ...(botUserId && { botUserId }) });
-        }
-        const whatsappBinding = bindings.find(
-          (b: any) => b.agentId === id && b.match?.channel === "whatsapp"
-        );
-        if (whatsappBinding) {
+      // For whatsapp
+      if (channels.whatsapp && channels.whatsapp.enabled !== false) {
+        if (id === "main") {
           const botUserId = whatsappDirectPeerIds[id] || null;
           platforms.push({ name: "whatsapp", ...(botUserId && { botUserId }) });
         }
@@ -435,44 +469,26 @@ export async function GET() {
     const feishuAgentIds = agentsWithStatus.filter((a: any) => a.platforms.some((p: any) => p.name === "feishu")).map((a: any) => a.id);
     const groupChats = getGroupChats(agentIds, agentMap, feishuAgentIds, sessionsMap);
 
-    const authProviderIds = new Set<string>();
-    if (config.auth?.profiles) {
-      for (const profileKey of Object.keys(config.auth.profiles)) {
-        const profile = config.auth.profiles[profileKey];
-        const providerId = profile?.provider || profileKey.split(":")[0];
-        if (providerId) authProviderIds.add(providerId);
-      }
+    // 提取模型 providers — nanobot has flat config.providers
+    let providers: any[] = [];
+
+    // nanobot: providers are at root level with apiKey/apiBase
+    const nanobotProviders = config.providers || {};
+    for (const [providerId, providerConfig] of Object.entries(nanobotProviders)) {
+      const usedBy = agentsWithStatus
+        .filter((a: any) => typeof a.model === "string" && a.model.startsWith(providerId + "/"))
+        .map((a: any) => ({ id: a.id, emoji: a.emoji, name: a.name }));
+
+      providers.push({
+        id: providerId,
+        api: (providerConfig as any).apiBase || undefined,
+        accessMode: "api_key",
+        models: [],
+        usedBy,
+      });
     }
 
-    // 提取模型 providers
-    let providers = Object.entries(config.models?.providers || {}).map(
-      ([providerId, provider]: [string, any]) => {
-        const models = (provider.models || []).map((m: any) => ({
-          id: m.id,
-          name: m.name || m.id,
-          contextWindow: m.contextWindow,
-          maxTokens: m.maxTokens,
-          reasoning: m.reasoning,
-          input: m.input,
-        }));
-
-        // 找出使用该 provider 的 agents
-        const usedBy = agentsWithStatus
-          .filter((a: any) => typeof a.model === "string" && a.model.startsWith(providerId + "/"))
-          .map((a: any) => ({ id: a.id, emoji: a.emoji, name: a.name }));
-
-        return {
-          id: providerId,
-          api: provider.api,
-          accessMode: "api_key",
-          models,
-          usedBy,
-        };
-      }
-    );
-
-    // 始终合并 auth.profiles + agents/defaults 推断的 provider/model，
-    // 兼容 models.providers 与 auth.profiles 同时存在的配置。
+    // Infer models from agents.defaults and agent models
     const providerModels: Record<string, { id: string; name?: string }[]> = {};
 
     const ensureProvider = (providerId: string) => {
@@ -489,9 +505,6 @@ export async function GET() {
         providerModels[providerId].push({ id: modelId, ...(alias && { name: alias }) });
       }
     };
-
-    // 从 auth.profiles 提取 provider 名称
-    for (const providerId of authProviderIds) ensureProvider(providerId);
 
     // 从 agents.defaults.models 提取模型列表
     const defaultsModels = config.agents?.defaults?.models || {};
@@ -513,12 +526,8 @@ export async function GET() {
         const usedBy = agentsWithStatus
           .filter((a: any) => typeof a.model === "string" && a.model.startsWith(providerId + "/"))
           .map((a: any) => ({ id: a.id, emoji: a.emoji, name: a.name }));
-        target = { id: providerId, api: undefined, accessMode: authProviderIds.has(providerId) ? "auth" : "api_key", models: [], usedBy };
+        target = { id: providerId, api: undefined, accessMode: "api_key", models: [], usedBy };
         providers.push(target);
-      }
-
-      if (!target.accessMode) {
-        target.accessMode = authProviderIds.has(providerId) ? "auth" : "api_key";
       }
 
       for (const m of inferredModels) {
@@ -543,8 +552,8 @@ export async function GET() {
       providers,
       defaults: { model: defaultModel, fallbacks },
       gateway: {
-        port: config.gateway?.port || 18789,
-        token: config.gateway?.auth?.token || "",
+        port: config.gateway?.port || 18790,
+        token: "",
         host: config.gateway?.host || config.gateway?.hostname || "",
       },
       groupChats,

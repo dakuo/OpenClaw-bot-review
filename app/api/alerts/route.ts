@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(process.env.HOME || "", ".openclaw");
-const ALERTS_CONFIG_PATH = path.join(OPENCLAW_HOME, "alerts.json");
+const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
+const ALERTS_CONFIG_PATH = path.join(NANOBOT_HOME, "alerts.json");
 
 interface AlertRule {
   id: string;
