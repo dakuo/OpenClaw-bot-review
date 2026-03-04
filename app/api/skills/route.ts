@@ -4,24 +4,44 @@ import path from "path";
 
 const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
-// Find nanobot package directory (Python package)
 function findNanobotPkg(): string | null {
-  // Check common Python site-packages locations
+  const { execSync } = require("child_process");
   const candidates: string[] = [];
   
-  // Try to find via Python path
-  try {
-    const { execSync } = require("child_process");
-    const sitePackages = execSync("python3 -c \"import site; print(site.getsitepackages()[0])\"", { encoding: "utf-8" }).trim();
-    if (sitePackages) {
-      candidates.push(path.join(sitePackages, "nanobot"));
-    }
-  } catch {}
+  // Try multiple Python binaries since the system python3 may not have nanobot
+  const pythonBins = ["python3", "python", "python3.13", "python3.12", "python3.11"];
+  for (const py of pythonBins) {
+    try {
+      const pkgPath = execSync(`${py} -c "import nanobot, os; print(os.path.dirname(nanobot.__file__))"`, { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+      if (pkgPath) { candidates.push(pkgPath); break; }
+    } catch {}
+  }
   
-  // Common fallback locations
+  // Also try pip show for editable installs
+  for (const pip of ["pip3", "pip"]) {
+    try {
+      const output = execSync(`${pip} show nanobot-ai 2>/dev/null || ${pip} show nanobot 2>/dev/null`, { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
+      const locMatch = output.match(/Location:\s*(.+)/);
+      if (locMatch) candidates.push(path.join(locMatch[1].trim(), "nanobot"));
+      const editMatch = output.match(/Editable project location:\s*(.+)/);
+      if (editMatch) candidates.push(path.join(editMatch[1].trim(), "nanobot"));
+    } catch {}
+  }
+  
+  // Env var override
+  if (process.env.NANOBOT_REPO) {
+    candidates.push(path.join(process.env.NANOBOT_REPO, "nanobot"));
+  }
+  
+  // Common git clone / home directory locations
+  const home = process.env.HOME || "";
   candidates.push(
-    path.join(process.env.HOME || "", ".local/lib/python3.11/site-packages/nanobot"),
-    path.join(process.env.HOME || "", ".local/lib/python3.12/site-packages/nanobot"),
+    path.join(home, "nanobot/nanobot"),
+    path.join(home, "projects/nanobot/nanobot"),
+    path.join(home, "code/nanobot/nanobot"),
+    path.join(home, ".local/lib/python3.11/site-packages/nanobot"),
+    path.join(home, ".local/lib/python3.12/site-packages/nanobot"),
+    path.join(home, ".local/lib/python3.13/site-packages/nanobot"),
     "/usr/local/lib/python3.11/site-packages/nanobot",
     "/usr/local/lib/python3.12/site-packages/nanobot",
     "/usr/lib/python3/dist-packages/nanobot",

@@ -65,15 +65,18 @@ async function parseAgentSessions(agentId: string): Promise<InternalDayStat[]> {
 
         messages.push({ role, ts, stopReason: entry.stopReason });
 
-        if (role === "assistant" && entry.usage) {
+        if (role === "assistant") {
           const date = ts.slice(0, 10);
           if (!dayMap[date]) {
             dayMap[date] = { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, messageCount: 0, avgResponseMs: 0, responseTimes: [] };
           }
-          dayMap[date].inputTokens += entry.usage.input || 0;
-          dayMap[date].outputTokens += entry.usage.output || 0;
-          dayMap[date].totalTokens += entry.usage.totalTokens || 0;
           dayMap[date].messageCount += 1;
+          // nanobot may not include usage in session JSONL — count what's available
+          if (entry.usage) {
+            dayMap[date].inputTokens += entry.usage.input || 0;
+            dayMap[date].outputTokens += entry.usage.output || 0;
+            dayMap[date].totalTokens += entry.usage.totalTokens || 0;
+          }
         }
       }
 
