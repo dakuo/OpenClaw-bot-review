@@ -1,51 +1,66 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { isGatewayRunning } from "../utils/gateway";
 
 const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
+const DEGRADED_LATENCY_MS = 1500;
 
 export async function GET() {
+  const startedAt = Date.now();
   try {
     const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     const config = JSON.parse(raw);
     const port = config.gateway?.port || 18790;
     const webCfg = config.gateway?.web || {};
-    const webEnabled = webCfg.enabled !== false;
     const webHost = webCfg.host || "127.0.0.1";
     const webToken = webCfg.token || "";
 
-    const running = isGatewayRunning();
-    if (!running) {
-      return NextResponse.json({ ok: false, error: "Gateway not running" });
+    const url = `http://${webHost}:${port}/api/health`;
+    const headers: Record<string, string> = {};
+    if (webToken) headers["Authorization"] = `Bearer ${webToken}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const resp = await fetch(url, { headers, signal: controller.signal });
+    clearTimeout(timeout);
+    const checkedAt = Date.now();
+    const responseMs = checkedAt - startedAt;
+
+    if (!resp.ok) {
+      return NextResponse.json({
+        ok: false,
+        error: `HTTP ${resp.status}`,
+        status: "down",
+        checkedAt,
+        responseMs,
+      });
     }
 
-    let httpOk = false;
-    if (webEnabled) {
-      try {
-        const resp = await fetch(`http://${webHost}:${port}/api/health`, {
-          signal: AbortSignal.timeout(3000),
-        });
-        httpOk = resp.ok;
-      } catch {}
-    }
-
-    const channels: string[] = [];
-    const ch = config.channels || {};
-    for (const [name, cfg] of Object.entries(ch)) {
-      if ((cfg as any).enabled !== false && (cfg as any).token || (cfg as any).botToken || (cfg as any).appId || (cfg as any).clientId) {
-        channels.push(name);
-      }
-    }
-
+    const data = await resp.json().catch(() => null);
     return NextResponse.json({
       ok: true,
-      data: { channels, port, host: webHost, httpOk },
-      webUrl: httpOk ? `http://localhost:${port}/chat?token=${encodeURIComponent(webToken)}` : null,
-      webToken: httpOk ? webToken : null,
+      data,
+      status: responseMs > DEGRADED_LATENCY_MS ? "degraded" : "healthy",
+      checkedAt,
+      responseMs,
+      webUrl: `http://localhost:${port}/chat${webToken ? '?token=' + encodeURIComponent(webToken) : ''}`,
     });
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err.message });
+    const checkedAt = Date.now();
+    const responseMs = checkedAt - startedAt;
+    const msg = err.cause?.code === "ECONNREFUSED"
+      ? "Gateway not running"
+      : err.name === "AbortError"
+        ? "Request timeout"
+        : err.message;
+    return NextResponse.json({
+      ok: false,
+      error: msg,
+      status: "down",
+      checkedAt,
+      responseMs,
+    });
   }
 }

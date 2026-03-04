@@ -64,6 +64,7 @@ export interface Seat {
 }
 
 export interface FurnitureInstance {
+  uid?: string
   sprite: SpriteData
   /** Pixel x (top-left) */
   x: number
@@ -116,6 +117,7 @@ export const FurnitureType = {
   PAINTING_SMALL_1: 'ts_painting_small_1',
   PAINTING_SMALL_2: 'ts_painting_small_2',
   PAINTING_SMALL_3: 'ts_painting_small_3',
+  SERVER_RACK: 'server_rack',
   PHONE: 'phone',
   SOFA: 'sofa',
   COFFEE: 'coffee',
@@ -206,4 +208,7 @@ export interface Character {
   codeSnippets: Array<{ text: string; age: number; x: number; y: number }>
   photoComments: Array<{ text: string; age: number; x: number }>
   isViewingPhoto: boolean
+  isSystemRole?: boolean
+  systemRoleType?: 'gateway_sre'
+  systemStatus?: 'unknown' | 'healthy' | 'degraded' | 'down'
 }

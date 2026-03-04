@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { OfficeState } from '@/lib/pixel-office/engine/officeState'
+import { OfficeState, type GatewaySreState } from '@/lib/pixel-office/engine/officeState'
 import { renderFrame } from '@/lib/pixel-office/engine/renderer'
 import { buildGatewayUrl } from "@/lib/gateway-url"
 import type { EditorRenderState } from '@/lib/pixel-office/engine/renderer'
@@ -169,10 +169,18 @@ const MOBILE_MAX_ZOOM = 6
 const MOBILE_FIT_PADDING_PX = 2
 const MOBILE_TOP_EXTRA_TILES = 0.5
 const MOBILE_VIEW_NUDGE_Y_PX = -10
+const DESKTOP_TOP_EXTRA_TILES = 1.0
+const DESKTOP_TOP_SAFE_PADDING_PX = 4
 const CODE_SNIPPET_LIFETIME_SEC = 5.5
+const SRE_BLACKWORD_MAX_FLOAT_DIST_PX = 320
 const FLOATING_TICK_INTERVAL_DESKTOP_MS = 48
 const FLOATING_TICK_INTERVAL_MOBILE_MS = 32
 const AGENT_ACTIVITY_POLL_INTERVAL_MS = 1000
+const GATEWAY_HEALTH_POLL_INTERVAL_MS = 10000
+const GATEWAY_DEGRADED_LATENCY_MS = 1500
+const GATEWAY_SRE_DOWN_FAIL_THRESHOLD = 2
+const GATEWAY_SRE_DEGRADED_THRESHOLD = 2
+const GATEWAY_SRE_RECOVERY_SUCCESS_THRESHOLD = 2
 
 let cachedOfficeState: OfficeState | null = null
 let cachedEditorState: EditorState | null = null
@@ -206,6 +214,16 @@ export default function PixelOfficePage() {
   const contributionsRef = useRef<ContributionData | null>(null)
   const photographRef = useRef<HTMLImageElement | null>(null)
   const gatewayRef = useRef<{ port: number; token?: string; host?: string }>({ port: 18789 })
+  const gatewayHealthyRef = useRef<boolean>(true)
+  const gatewaySreRef = useRef<{
+    status: GatewaySreState
+    error: string | null
+    responseMs: number | null
+    checkedAt: number | null
+  }>({ status: 'unknown', error: null, responseMs: null, checkedAt: null })
+  const gatewayDownStreakRef = useRef(0)
+  const gatewayDegradedStreakRef = useRef(0)
+  const gatewayHealthyStreakRef = useRef(0)
   const providersRef = useRef<Array<{ id: string; api: string; models: Array<{ id: string; name: string; contextWindow?: number }>; usedBy: Array<{ id: string; emoji: string; name: string }> }>>([])
   const [isEditMode, setIsEditMode] = useState(cachedIsEditMode)
   const [soundOn, setSoundOn] = useState(true)
@@ -223,9 +241,15 @@ export default function PixelOfficePage() {
   const [versionLoading, setVersionLoading] = useState(false)
   const [versionLoadFailed, setVersionLoadFailed] = useState(false)
   const [showIdleRank, setShowIdleRank] = useState(false)
+  const selectedAgentOpenedAtRef = useRef(0)
+  const tokenRankOpenedAtRef = useRef(0)
+  const modelPanelOpenedAtRef = useRef(0)
+  const fullscreenPhotoOpenedAtRef = useRef(0)
+  const [subagentCreatorInfo, setSubagentCreatorInfo] = useState<{ parentAgentId: string; x: number; y: number } | null>(null)
+  const [serverTooltip, setServerTooltip] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 })
   const idleRankRef = useRef<Array<{ agentId: string; onlineMinutes: number; activeMinutes: number; idleMinutes: number; idlePercent: number }> | null>(null)
   const floatingCommentsRef = useRef<Array<{ key: string; text: string; x: number; y: number; opacity: number }>>([])
-  const floatingCodeRef = useRef<Array<{ key: string; text: string; x: number; y: number; opacity: number }>>([])
+  const floatingCodeRef = useRef<Array<{ key: string; text: string; x: number; y: number; opacity: number; kind?: 'default' | 'sre' }>>([])
   const floatingTickUpdatedAtRef = useRef<number>(0)
   const [floatingTick, setFloatingTick] = useState(0)
   const [isMobileViewport, setIsMobileViewport] = useState(false)
@@ -248,6 +272,85 @@ export default function PixelOfficePage() {
     }
   }, [])
 
+  const refreshGatewayHealthSnapshot = useCallback(async () => {
+    let rawStatus: GatewaySreState = 'down'
+    let error: string | null = null
+    let responseMs: number | null = null
+    let checkedAt: number | null = null
+    try {
+      const res = await fetch('/api/gateway-health', { cache: 'no-store' })
+      const data = await res.json()
+      checkedAt = typeof data?.checkedAt === 'number' ? data.checkedAt : Date.now()
+      responseMs = typeof data?.responseMs === 'number' ? data.responseMs : null
+      error = typeof data?.error === 'string' ? data.error : null
+      if (data?.status === 'healthy' || data?.status === 'degraded' || data?.status === 'down') {
+        rawStatus = data.status
+      } else if (!data?.ok) {
+        rawStatus = 'down'
+      } else if (typeof responseMs === 'number' && responseMs > GATEWAY_DEGRADED_LATENCY_MS) {
+        rawStatus = 'degraded'
+      } else {
+        rawStatus = 'healthy'
+      }
+    } catch {
+      rawStatus = 'down'
+      error = 'fetch failed'
+      checkedAt = Date.now()
+    }
+
+    const prev = gatewaySreRef.current.status
+    let effective: GatewaySreState = prev
+
+    if (rawStatus === 'down') {
+      gatewayDownStreakRef.current += 1
+      gatewayDegradedStreakRef.current = 0
+      gatewayHealthyStreakRef.current = 0
+      if (
+        prev === 'unknown' ||
+        prev === 'down' ||
+        gatewayDownStreakRef.current >= GATEWAY_SRE_DOWN_FAIL_THRESHOLD
+      ) {
+        effective = 'down'
+      }
+    } else if (rawStatus === 'degraded') {
+      gatewayDegradedStreakRef.current += 1
+      gatewayDownStreakRef.current = 0
+      gatewayHealthyStreakRef.current = 0
+      if (
+        prev === 'unknown' ||
+        prev === 'degraded' ||
+        gatewayDegradedStreakRef.current >= GATEWAY_SRE_DEGRADED_THRESHOLD
+      ) {
+        effective = 'degraded'
+      }
+    } else {
+      gatewayHealthyStreakRef.current += 1
+      gatewayDownStreakRef.current = 0
+      gatewayDegradedStreakRef.current = 0
+      if (prev === 'down' || prev === 'degraded') {
+        if (gatewayHealthyStreakRef.current >= GATEWAY_SRE_RECOVERY_SUCCESS_THRESHOLD) {
+          effective = 'healthy'
+        }
+      } else {
+        effective = 'healthy'
+      }
+    }
+
+    gatewaySreRef.current = {
+      status: effective,
+      error,
+      responseMs,
+      checkedAt,
+    }
+    gatewayHealthyRef.current = effective !== 'down'
+    officeRef.current?.updateGatewaySreState({
+      status: effective,
+      error,
+      responseMs,
+      checkedAt,
+    })
+  }, [])
+
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 767px)")
     const apply = () => setIsMobileViewport(mql.matches)
@@ -261,6 +364,7 @@ export default function PixelOfficePage() {
     const loadLayout = async () => {
       if (cachedOfficeState) {
         officeRef.current = cachedOfficeState
+        officeRef.current.updateGatewaySreState(gatewaySreRef.current)
         savedLayoutRef.current = cachedSavedLayout
         editorRef.current = cachedEditorState ?? editorRef.current
         panRef.current = cachedPan
@@ -286,6 +390,7 @@ export default function PixelOfficePage() {
         officeRef.current = new OfficeState()
       }
       cachedOfficeState = officeRef.current
+      officeRef.current?.updateGatewaySreState(gatewaySreRef.current)
       cachedSavedLayout = savedLayoutRef.current
       if (!spriteAssetsPromise) {
         spriteAssetsPromise = Promise.all([loadCharacterPNGs(), loadWallPNG()]).then(() => undefined)
@@ -373,8 +478,19 @@ export default function PixelOfficePage() {
         panRef.current = { x: 0, y: Math.round(targetPanY) }
       } else {
         zoomRef.current = DESKTOP_CANVAS_ZOOM
-        if (panRef.current.x !== 0 || panRef.current.y !== 0) {
-          panRef.current = { x: 0, y: 0 }
+        const layout = office.layout
+        const rows = layout.rows
+        const mapH = rows * TILE_SIZE * zoomRef.current
+        const centerOffsetY = (height - mapH) / 2
+        const topExtraPx = DESKTOP_TOP_EXTRA_TILES * TILE_SIZE * zoomRef.current
+        const minPanY = topExtraPx + DESKTOP_TOP_SAFE_PADDING_PX - centerOffsetY
+        const maxPanY = height - (centerOffsetY + mapH)
+        const targetPanY = minPanY > maxPanY
+          ? minPanY
+          : Math.min(maxPanY, Math.max(minPanY, 0))
+        const nextPanY = Math.round(targetPanY)
+        if (panRef.current.x !== 0 || panRef.current.y !== nextPanY) {
+          panRef.current = { x: 0, y: nextPanY }
         }
       }
       const dpr = window.devicePixelRatio || 1
@@ -425,7 +541,8 @@ export default function PixelOfficePage() {
           { selectedAgentId: null, hoveredAgentId, hoveredTile: null, seats: office.seats, characters: office.characters },
           editorRender, office.layout.tileColors, office.layout.cols, office.layout.rows,
           undefined,
-          contributionsRef.current ?? undefined, photographRef.current ?? undefined)
+          contributionsRef.current ?? undefined, photographRef.current ?? undefined,
+          gatewayHealthyRef.current)
 
         // Collect photo comment positions for DOM rendering
         const zoom = zoomRef.current
@@ -439,7 +556,7 @@ export default function PixelOfficePage() {
         const containerTop = container.offsetTop
         const lifetime = 4.0
         const items: Array<{ key: string; text: string; x: number; y: number; opacity: number }> = []
-        const codeItems: Array<{ key: string; text: string; x: number; y: number; opacity: number }> = []
+        const codeItems: Array<{ key: string; text: string; x: number; y: number; opacity: number; kind?: 'default' | 'sre' }> = []
         const workingCharIds = new Set<number>()
         for (const a of agents) {
           if (a.state !== 'working') continue
@@ -468,11 +585,17 @@ export default function PixelOfficePage() {
           }
         }
         for (const ch of office.getCharacters()) {
-          if (!workingCharIds.has(ch.id)) continue
+          const isSreBlackword =
+            ch.systemRoleType === 'gateway_sre' &&
+            ch.systemStatus === 'down' &&
+            ch.state === 'idle'
+          if (!workingCharIds.has(ch.id) && !isSreBlackword) continue
           if (ch.codeSnippets.length === 0) continue
           const anchorX = ox + ch.x * zoom
-          const anchorY = containerTop + oy + (ch.y - 10) * zoom
-          const totalDist = anchorY + 24
+          const anchorY = containerTop + oy + (ch.y - (isSreBlackword ? 24 : 10)) * zoom
+          const totalDist = isSreBlackword
+            ? Math.min(anchorY + 24, SRE_BLACKWORD_MAX_FLOAT_DIST_PX)
+            : (anchorY + 24)
           for (let i = 0; i < ch.codeSnippets.length; i++) {
             const s = ch.codeSnippets[i]
             const progress = s.age / CODE_SNIPPET_LIFETIME_SEC
@@ -484,6 +607,7 @@ export default function PixelOfficePage() {
               x: anchorX + s.x * zoom,
               y: anchorY - progress * totalDist,
               opacity: Math.max(0, alpha * 0.9),
+              kind: isSreBlackword ? 'sre' : 'default',
             })
           }
         }
@@ -641,6 +765,24 @@ export default function PixelOfficePage() {
     return () => clearInterval(interval)
   }, [])
 
+  // Poll gateway health for server alarm lamp in Pixel Office
+  useEffect(() => {
+    void refreshGatewayHealthSnapshot()
+    const interval = setInterval(refreshGatewayHealthSnapshot, GATEWAY_HEALTH_POLL_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [refreshGatewayHealthSnapshot])
+
+  // Keep gateway SRE head label aligned with current locale.
+  useEffect(() => {
+    if (!officeReady) return
+    const office = officeRef.current
+    if (!office) return
+    const info = office.getGatewaySreInfo()
+    if (!info) return
+    const ch = office.characters.get(info.id)
+    if (ch) ch.label = t('pixelOffice.gatewaySre.name')
+  }, [officeReady, t])
+
   // ── Editor helpers ──────────────────────────────────────────
   const applyEdit = useCallback((newLayout: OfficeLayout) => {
     const office = officeRef.current
@@ -721,6 +863,7 @@ export default function PixelOfficePage() {
     const { col, row, worldX, worldY } = mouseToTile(e.clientX, e.clientY, canvasRef.current, office, zoomRef.current, panRef.current)
 
     if (editor.isEditMode) {
+      if (serverTooltip.open) setServerTooltip((prev) => ({ ...prev, open: false }))
       // Update ghost preview
       if (editor.activeTool === EditTool.FURNITURE_PLACE) {
         const entry = getCatalogEntry(editor.selectedFurnitureType)
@@ -830,9 +973,16 @@ export default function PixelOfficePage() {
         return tileX >= f.col && tileX < f.col + entry.footprintW &&
                tileY >= f.row && tileY < f.row + entry.footprintH
       })
+      const onServer = office.layout.furniture.some(f => {
+        if (f.uid !== 'server-b-left' && f.type !== 'server_rack') return false
+        const entry = getCatalogEntry(f.type)
+        if (!entry) return false
+        return tileX >= f.col && tileX < f.col + entry.footprintW &&
+               tileY >= f.row && tileY < f.row + entry.footprintH
+      })
       const onPhoto = photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1
       const onHeatmap = contributionsRef.current && contributionsRef.current.username !== 'mock' && tileX >= 1 && tileX < 10 && tileY >= -0.5 && tileY < 1
-      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || onWhiteboard || onClock || onPhone || onSofa || id !== null || lobsterId !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
+      if (canvasRef.current) canvasRef.current.style.cursor = (onCamera || onPC || onLibrary || onWhiteboard || onClock || onPhone || onSofa || onServer || id !== null || lobsterId !== null || onPhoto || onHeatmap) ? 'pointer' : 'default'
     }
   }
 
@@ -845,9 +995,23 @@ export default function PixelOfficePage() {
     if (!editor.isEditMode) {
       // Non-edit mode: check camera click or character click
       if (e.button === 0) {
+        setSubagentCreatorInfo(null)
+        const rect = canvasRef.current.getBoundingClientRect()
+        const clickX = e.clientX - rect.left
+        const clickY = e.clientY - rect.top
         const { worldX, worldY } = mouseToTile(e.clientX, e.clientY, canvasRef.current, office, zoomRef.current, panRef.current)
         const tileX = worldX / TILE_SIZE
         const tileY = worldY / TILE_SIZE
+        const clickedServer = office.layout.furniture.some(f => {
+          if (f.uid !== 'server-b-left' && f.type !== 'server_rack') return false
+          const entry = getCatalogEntry(f.type)
+          if (!entry) return false
+          return tileX >= f.col && tileX < f.col + entry.footprintW &&
+                 tileY >= f.row && tileY < f.row + entry.footprintH
+        })
+        if (!clickedServer && serverTooltip.open) {
+          setServerTooltip((prev) => ({ ...prev, open: false }))
+        }
         const clickedCamera = office.layout.furniture.find(f => {
           if (f.type !== 'camera') return false
           const entry = getCatalogEntry(f.type)
@@ -881,6 +1045,7 @@ export default function PixelOfficePage() {
                  tileY >= f.row && tileY < f.row + entry.footprintH
         })) {
           // Click on right bookshelf — show model panel
+          modelPanelOpenedAtRef.current = performance.now()
           setShowModelPanel(true)
         } else if (office.layout.furniture.some(f => {
           if (f.uid !== 'whiteboard-r') return false
@@ -890,6 +1055,7 @@ export default function PixelOfficePage() {
                  tileY >= f.row && tileY < f.row + entry.footprintH
         })) {
           // Click on right whiteboard — show token ranking
+          tokenRankOpenedAtRef.current = performance.now()
           setShowTokenRank(true)
         } else if (office.layout.furniture.some(f => {
           if (f.uid !== 'clock-r') return false
@@ -925,8 +1091,13 @@ export default function PixelOfficePage() {
         })) {
           // Click on sofa — show idle rank
           setShowIdleRank(true)
+        } else if (clickedServer) {
+          // Click on server rack — show tooltip and refresh latest status
+          setServerTooltip({ open: true, x: clickX, y: clickY })
+          void refreshGatewayHealthSnapshot()
         } else if (photographRef.current && tileX >= 10 && tileX < 17 && tileY >= -0.5 && tileY < 1) {
           // Click on wall photograph — fullscreen view
+          fullscreenPhotoOpenedAtRef.current = performance.now()
           setFullscreenPhoto(true)
         } else if (contributionsRef.current && contributionsRef.current.username !== 'mock' && tileX >= 1 && tileX < 10 && tileY >= -0.5 && tileY < 1) {
           // Click on GitHub contribution heatmap — open profile
@@ -939,8 +1110,37 @@ export default function PixelOfficePage() {
           const charId = office.getCharacterAt(worldX, worldY)
           if (charId !== null) {
             const map = agentIdMapRef.current
+            let found = false
             for (const [aid, cid] of map.entries()) {
-              if (cid === charId) { setSelectedAgentId(aid); break }
+              if (cid === charId) {
+                selectedAgentOpenedAtRef.current = performance.now()
+                setSelectedAgentId(aid)
+                found = true
+                break
+              }
+            }
+            if (!found) {
+              const clickedCh = office.characters.get(charId)
+              if (clickedCh?.systemRoleType === 'gateway_sre' && isMobileViewport) {
+                setServerTooltip({ open: true, x: clickX, y: clickY })
+                void refreshGatewayHealthSnapshot()
+              } else if (clickedCh?.isSubagent && clickedCh.parentAgentId != null) {
+                let parentAgentId: string | null = null
+                for (const [aid, cid] of map.entries()) {
+                  if (cid === clickedCh.parentAgentId) {
+                    parentAgentId = aid
+                    break
+                  }
+                }
+                if (parentAgentId && isMobileViewport) {
+                  setSubagentCreatorInfo({
+                    parentAgentId,
+                    x: clickX,
+                    y: clickY,
+                  })
+                }
+              }
+              setSelectedAgentId(null)
             }
           } else {
             setSelectedAgentId(null)
@@ -1164,13 +1364,17 @@ export default function PixelOfficePage() {
         setShowModelPanel(false)
         return
       }
+      if (subagentCreatorInfo) {
+        setSubagentCreatorInfo(null)
+        return
+      }
       if (selectedAgentId) {
         setSelectedAgentId(null)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [fullscreenPhoto, isEditMode, selectedAgentId, showActivityHeatmap, showIdleRank, showModelPanel, showPhonePanel, showTokenRank])
+  }, [fullscreenPhoto, isEditMode, selectedAgentId, showActivityHeatmap, showIdleRank, showModelPanel, showPhonePanel, showTokenRank, subagentCreatorInfo])
 
   // ── Editor toolbar callbacks ──────────────────────────────────
   const handleToolChange = useCallback((tool: EditTool) => {
@@ -1244,24 +1448,32 @@ export default function PixelOfficePage() {
     if (agentId) {
       const agent = agents.find(a => a.agentId === agentId)
       const stats = agentStatsRef.current.get(agentId)
-      return { agent, stats, isSubagent: false as const, parentAgentId: null as string | null }
+      return { kind: 'agent' as const, agent, stats, isSubagent: false as const, parentAgentId: null as string | null }
     }
 
     const hoveredCharacter = officeRef.current?.characters.get(hoveredAgentId)
-    if (!hoveredCharacter?.isSubagent || hoveredCharacter.parentAgentId == null) return null
-    let parentAgentId: string | null = null
-    for (const [aid, cid] of map.entries()) {
-      if (cid === hoveredCharacter.parentAgentId) { parentAgentId = aid; break }
+    if (hoveredCharacter?.isSubagent && hoveredCharacter.parentAgentId != null) {
+      let parentAgentId: string | null = null
+      for (const [aid, cid] of map.entries()) {
+        if (cid === hoveredCharacter.parentAgentId) { parentAgentId = aid; break }
+      }
+      if (!parentAgentId) return null
+      const parentAgent = agents.find(a => a.agentId === parentAgentId)
+      if (!parentAgent) return null
+      return {
+        kind: 'subagent' as const,
+        agent: parentAgent,
+        stats: agentStatsRef.current.get(parentAgentId),
+        isSubagent: true as const,
+        parentAgentId,
+      }
     }
-    if (!parentAgentId) return null
-    const parentAgent = agents.find(a => a.agentId === parentAgentId)
-    if (!parentAgent) return null
-    return {
-      agent: parentAgent,
-      stats: agentStatsRef.current.get(parentAgentId),
-      isSubagent: true as const,
-      parentAgentId,
+
+    const gatewaySre = officeRef.current?.getGatewaySreInfo()
+    if (gatewaySre && gatewaySre.id === hoveredAgentId) {
+      return { kind: 'gatewaySre' as const, gatewaySre }
     }
+    return null
   }, [hoveredAgentId, agents])
 
   const hoveredInfo = getHoveredAgentInfo()
@@ -1377,7 +1589,11 @@ export default function PixelOfficePage() {
           }}>
           <span
             className="inline-block px-2 py-0.5 rounded-md text-sm font-mono font-semibold"
-            style={{ backgroundColor: 'rgba(0,0,0,0.72)', color: '#4ade80' }}
+            style={{
+              backgroundColor: fc.kind === 'sre' ? 'rgba(28,6,6,0.9)' : 'rgba(0,0,0,0.72)',
+              color: fc.kind === 'sre' ? '#DC2626' : '#4ade80',
+              border: fc.kind === 'sre' ? '1px solid rgba(127,29,29,0.85)' : '1px solid transparent',
+            }}
           >
             {fc.text}
           </span>
@@ -1472,27 +1688,101 @@ export default function PixelOfficePage() {
         </button>
 
         {/* Agent hover tooltip */}
-        {hoveredInfo && hoveredInfo.agent && !isEditMode && !selectedAgentId && !isMobileViewport && (
+        {hoveredInfo && !isEditMode && !selectedAgentId && !isMobileViewport && (
           <div className="absolute pointer-events-none z-10 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)]/95 backdrop-blur-sm text-xs shadow-lg"
             style={{ left: Math.min(mousePosRef.current.x + 12, (containerRef.current?.clientWidth || 300) - 180), top: mousePosRef.current.y + 12 }}>
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span>{hoveredInfo.agent.emoji}</span>
-              <span className="font-semibold text-[var(--text)]">{hoveredInfo.isSubagent ? '临时工' : hoveredInfo.agent.name}</span>
-            </div>
-            {hoveredInfo.isSubagent ? (
-              <div className="text-[var(--text-muted)]">
-                {(hoveredInfo.parentAgentId || 'unknown')} agent创建的subagent
-              </div>
+            {hoveredInfo.kind === 'gatewaySre' ? (
+              <>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span>🧯</span>
+                  <span className="font-semibold text-[var(--text)]">{t('pixelOffice.gatewaySre.name')}</span>
+                </div>
+                <div className="space-y-0.5 text-[var(--text-muted)]">
+                  <div className="flex justify-between gap-4">
+                    <span>{t('pixelOffice.gatewaySre.statusLabel')}</span>
+                    <span className="text-[var(--text)]">{t(`pixelOffice.gatewaySre.status.${hoveredInfo.gatewaySre.status}`)}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span>{t('pixelOffice.gatewaySre.responseMs')}</span>
+                    <span className="text-[var(--text)]">{hoveredInfo.gatewaySre.responseMs != null ? `${hoveredInfo.gatewaySre.responseMs}ms` : '--'}</span>
+                  </div>
+                  {hoveredInfo.gatewaySre.error && (
+                    <div className="text-red-300">{hoveredInfo.gatewaySre.error}</div>
+                  )}
+                </div>
+              </>
             ) : (
-              <div className="space-y-0.5 text-[var(--text-muted)]">
-                <div className="flex justify-between gap-4"><span>{t('agent.sessionCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.sessionCount ?? '--'}</span></div>
-                <div className="flex justify-between gap-4"><span>{t('agent.messageCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.messageCount ?? '--'}</span></div>
-                <div className="flex justify-between gap-4"><span>{t('agent.tokenUsage')}</span><span className="text-[var(--text)]">{hoveredInfo.stats ? formatTokens(hoveredInfo.stats.totalTokens) : '--'}</span></div>
-                <div className="flex justify-between gap-4"><span>{t('agent.todayAvgResponse')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.todayAvgResponseMs ? `${(hoveredInfo.stats.todayAvgResponseMs / 1000).toFixed(1)}s` : '--'}</span></div>
-              </div>
+              <>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span>{hoveredInfo.agent?.emoji}</span>
+                  <span className="font-semibold text-[var(--text)]">{hoveredInfo.isSubagent ? '临时工' : hoveredInfo.agent?.name}</span>
+                </div>
+                {hoveredInfo.isSubagent ? (
+                  <div className="text-[var(--text-muted)]">
+                    {(hoveredInfo.parentAgentId || 'unknown')} agent创建的subagent
+                  </div>
+                ) : (
+                  <div className="space-y-0.5 text-[var(--text-muted)]">
+                    <div className="flex justify-between gap-4"><span>{t('agent.sessionCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.sessionCount ?? '--'}</span></div>
+                    <div className="flex justify-between gap-4"><span>{t('agent.messageCount')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.messageCount ?? '--'}</span></div>
+                    <div className="flex justify-between gap-4"><span>{t('agent.tokenUsage')}</span><span className="text-[var(--text)]">{hoveredInfo.stats ? formatTokens(hoveredInfo.stats.totalTokens) : '--'}</span></div>
+                    <div className="flex justify-between gap-4"><span>{t('agent.todayAvgResponse')}</span><span className="text-[var(--text)]">{hoveredInfo.stats?.todayAvgResponseMs ? `${(hoveredInfo.stats.todayAvgResponseMs / 1000).toFixed(1)}s` : '--'}</span></div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
+
+        {/* Server click tooltip */}
+        {serverTooltip.open && !isEditMode && !selectedAgentId && (() => {
+          const snapshot = gatewaySreRef.current
+          const status = snapshot.status === 'healthy' || snapshot.status === 'degraded' || snapshot.status === 'down'
+            ? snapshot.status
+            : 'unknown'
+          const statusColor =
+            status === 'healthy' ? 'text-green-400'
+            : status === 'degraded' ? 'text-yellow-400'
+            : status === 'down' ? 'text-red-400'
+            : 'text-[var(--text-muted)]'
+          const tooltipLeft = Math.max(8, Math.min(serverTooltip.x + 12, (containerRef.current?.clientWidth || 300) - (isMobileViewport ? 220 : 200)))
+          const tooltipTop = Math.max(8, serverTooltip.y + 12)
+          return (
+            <div
+              className="absolute pointer-events-auto z-10 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)]/95 backdrop-blur-sm text-xs shadow-lg"
+              style={{ left: tooltipLeft, top: tooltipTop }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 text-[10px] leading-none text-[var(--text-muted)] hover:text-[var(--text)]"
+                onClick={() => setServerTooltip((prev) => ({ ...prev, open: false }))}
+                aria-label={t('common.close')}
+                title={t('common.close')}
+              >
+                ×
+              </button>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span>🖥️</span>
+                <span className="font-semibold text-[var(--text)]">Gateway Server</span>
+              </div>
+              <div className="space-y-0.5 text-[var(--text-muted)]">
+                <div className="flex justify-between gap-4">
+                  <span>{t('pixelOffice.gatewaySre.statusLabel')}</span>
+                  <span className={statusColor}>{t(`pixelOffice.serverStatus.${status}`)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span>{t('pixelOffice.gatewaySre.responseMs')}</span>
+                  <span className="text-[var(--text)]">{snapshot.responseMs != null ? `${snapshot.responseMs}ms` : '--'}</span>
+                </div>
+                {snapshot.error && (
+                  <div className="text-red-300">{snapshot.error}</div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Agent detail card (click) */}
         {selectedAgentId && !isEditMode && (() => {
@@ -1504,7 +1794,13 @@ export default function PixelOfficePage() {
             : stats.todayAvgResponseMs > 30000 ? 'text-yellow-400'
             : 'text-green-400' : 'text-[var(--text-muted)]'
           return (
-            <div className={modalOverlayClass} onClick={() => setSelectedAgentId(null)}>
+            <div
+              className={modalOverlayClass}
+              onClick={() => {
+                if (isMobileViewport && performance.now() - selectedAgentOpenedAtRef.current < 280) return
+                setSelectedAgentId(null)
+              }}
+            >
               <div className={modalPanelClass("w-72", "max-h-[78%]")} onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
@@ -1531,9 +1827,46 @@ export default function PixelOfficePage() {
           )
         })()}
 
+        {/* Mobile subagent creator tooltip */}
+        {subagentCreatorInfo && !isEditMode && isMobileViewport && (() => {
+          const tooltipLeft = Math.max(8, Math.min(subagentCreatorInfo.x + 12, (containerRef.current?.clientWidth || 300) - 220))
+          const tooltipTop = Math.max(8, subagentCreatorInfo.y + 12)
+          return (
+            <div
+              className="absolute pointer-events-auto z-10 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--card)]/95 backdrop-blur-sm text-xs shadow-lg"
+              style={{ left: tooltipLeft, top: tooltipTop }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 text-[10px] leading-none text-[var(--text-muted)] hover:text-[var(--text)]"
+                onClick={() => setSubagentCreatorInfo(null)}
+                aria-label={t('common.close')}
+                title={t('common.close')}
+              >
+                ×
+              </button>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span>🧑‍🔧</span>
+                <span className="font-semibold text-[var(--text)]">临时工来源</span>
+              </div>
+              <div className="space-y-0.5 text-[var(--text-muted)]">
+                <div>{subagentCreatorInfo.parentAgentId} agent创建的subagent</div>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Model panel (bookshelf click) */}
         {showModelPanel && !isEditMode && (
-          <div className={modalOverlayClass} onClick={() => setShowModelPanel(false)}>
+          <div
+            className={modalOverlayClass}
+            onClick={() => {
+              if (isMobileViewport && performance.now() - modelPanelOpenedAtRef.current < 280) return
+              setShowModelPanel(false)
+            }}
+          >
             <div className={modalPanelClass("w-80")} onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-3">
                 <span className="font-semibold text-[var(--text)]">📚 {t('models.title')}</span>
@@ -1577,11 +1910,16 @@ export default function PixelOfficePage() {
             .map(a => ({ ...a, tokens: agentStatsRef.current.get(a.agentId)?.totalTokens || 0 }))
             .sort((a, b) => b.tokens - a.tokens)
           const maxTokens = ranked[0]?.tokens || 1
+          const handleCloseTokenRankOverlay = () => {
+            // Prevent the opening tap from immediately closing the modal on mobile.
+            if (isMobileViewport && performance.now() - tokenRankOpenedAtRef.current < 280) return
+            setShowTokenRank(false)
+          }
           return (
-            <div className={modalOverlayClass} onClick={() => setShowTokenRank(false)}>
+            <div className={modalOverlayClass} onClick={handleCloseTokenRankOverlay}>
               <div className={modalPanelClass("w-80", "max-h-[78%]")} onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="font-semibold text-[var(--text)]">📊 Token {t('agent.tokenUsage')}</span>
+                  <span className="font-semibold text-[var(--text)]">📊 {t('agent.tokenUsage')}</span>
                   <button onClick={() => setShowTokenRank(false)} className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none">×</button>
                 </div>
                 {ranked.length === 0 ? (
@@ -1624,7 +1962,7 @@ export default function PixelOfficePage() {
           const svgH = topPad + 7 * (cellSize + gap)
           return (
             <div className={modalOverlayClass} onClick={() => setShowActivityHeatmap(false)}>
-              <div className={modalPanelClass("w-[min(94vw,56rem)]", "max-h-[85%]")} onClick={e => e.stopPropagation()}>
+              <div className={modalPanelClass("w-fit max-w-[94vw]", "max-h-[85%]")} onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-3">
                   <span className="font-semibold text-[var(--text)]">🕐 {t('pixelOffice.heatmap.title')}</span>
                   <button onClick={() => setShowActivityHeatmap(false)} className="text-[var(--text-muted)] hover:text-[var(--text)] text-lg leading-none">×</button>
@@ -1761,7 +2099,13 @@ export default function PixelOfficePage() {
 
         {/* Fullscreen photograph viewer */}
         {fullscreenPhoto && photographRef.current && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 cursor-pointer" onClick={() => setFullscreenPhoto(false)}>
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 cursor-pointer"
+            onClick={() => {
+              if (isMobileViewport && performance.now() - fullscreenPhotoOpenedAtRef.current < 280) return
+              setFullscreenPhoto(false)
+            }}
+          >
             <img src={photographRef.current.src} alt="photograph" className="max-w-[90%] max-h-[90%] object-contain rounded-lg shadow-2xl" />
             <button onClick={() => setFullscreenPhoto(false)} className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl leading-none">×</button>
           </div>

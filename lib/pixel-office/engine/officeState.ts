@@ -34,6 +34,7 @@ import type { BugEntity } from '../bugs/types'
 
 const CODE_SNIPPET_LIFETIME = 5.5 // seconds
 const CODE_SNIPPET_SPAWN_RATE = 0.6 // per second
+const SRE_BLACKWORD_SPAWN_RATE = 3.2 // per second
 const PHOTO_COMMENT_LIFETIME = 4.0 // seconds
 const PHOTO_COMMENT_SPAWN_RATE = 2.5 // per second
 const LOBSTER_RAGE_DURATION_SEC = 10
@@ -77,6 +78,59 @@ const CODE_SNIPPETS = [
   'nanobot logs', 'nanobot doctor', 'nanobot config get',
   'nanobot message send', 'nanobot skills', 'nanobot models', 'nanobot update',
 ]
+const SRE_BLACKWORDS = [
+  '先止血！',
+  '先看监控',
+  '先看P99',
+  '先查网关日志',
+  '先查日志',
+  '先复现',
+  '限流先开',
+  '熔断先上',
+  '先熔断',
+  '降级保命',
+  '做降级保核心链路',
+  '先扩容',
+  '先扩容顶住',
+  '先回滚',
+  '先重启试试',
+  '先重启网关',
+  '先保SLA',
+  '先兜底',
+  '核心链路优先',
+  '非核心先降级',
+  '流量削峰',
+  '开灰度观察',
+  '先旁路故障节点',
+  '先摘流坏实例',
+  '熔断阈值再收紧',
+  '重试风暴了',
+  '依赖超时传染了',
+  '线程池爆了',
+  '连接池见底了',
+  '缓存击穿了',
+  '缓存雪崩了',
+  'DB抖了',
+  'MQ堆积了',
+  '网关扛不住了',
+  '上游在抖',
+  '下游背压了',
+  '观察错误率',
+  '观察超时率',
+  '抓慢请求',
+  'RT飙了',
+  'error budget快打穿了',
+  '先拉值班同学',
+  '先同步业务方预期',
+  '先发故障通告',
+  '记录时间线，后面复盘',
+  '告警风暴来了',
+  '开战情室',
+  '恢复中...',
+  'SLA 要顶住',
+  'MTTR 压下来',
+  '这波别炸',
+]
 
 const PHOTO_COMMENTS = [
   '毒！', '毒德大学', '德味！', '刀锐奶化', '空气切割感',
@@ -96,6 +150,27 @@ const SUBAGENT_PRIORITY_SEAT_IDS = [
 const SUBAGENT_SPAWN_CENTER_COL = 10
 const SUBAGENT_SPAWN_CENTER_ROW = 14
 const SUBAGENT_RUN_SPEED_MULTIPLIER = 2.8
+const GATEWAY_SRE_LABEL = '值班SRE'
+const GATEWAY_SRE_STANDBY_COL = 2
+const GATEWAY_SRE_STANDBY_ROW = 14
+const GATEWAY_SRE_RESCUE_CANDIDATES = [
+  // Break-area server sits at left wall (around col 1~2, row 12~13).
+  // "Front of server" means the lower edge of the rack in this top-down view.
+  { col: 2, row: 14 },
+  { col: 1, row: 14 },
+  { col: 3, row: 13 },
+  { col: 3, row: 12 },
+] as const
+
+export type GatewaySreState = 'unknown' | 'healthy' | 'degraded' | 'down'
+
+export interface GatewaySreInfo {
+  id: number
+  status: GatewaySreState
+  error: string | null
+  responseMs: number | null
+  checkedAt: number | null
+}
 
 export class OfficeState {
   layout: OfficeLayout
@@ -119,9 +194,14 @@ export class OfficeState {
   private static CAT_ID = -9999
   private static LOBSTER_ID = -9998
   private static HUNTER_LOBSTER_ID = -9997
+  private static GATEWAY_SRE_ID = -9996
   private bugSystem: BugSystem
   private bugWorldWidth: number
   private bugWorldHeight: number
+  private gatewaySreStatus: GatewaySreState = 'unknown'
+  private gatewaySreError: string | null = null
+  private gatewaySreResponseMs: number | null = null
+  private gatewaySreCheckedAt: number | null = null
 
   private buildRuntimeBlockedTiles(furniture: PlacedFurniture[]): Set<string> {
     // Keep right-office stool seats walkable so adding subagent stools
@@ -146,6 +226,7 @@ export class OfficeState {
     this.spawnCat()
     this.spawnLobster()
     this.spawnHunterLobster()
+    this.ensureGatewaySre()
     this.bugWorldWidth = this.layout.cols * TILE_SIZE
     this.bugWorldHeight = this.layout.rows * TILE_SIZE
     this.bugSystem = new BugSystem(this.bugWorldWidth, this.bugWorldHeight, BUG_DEFAULT_COUNT)
@@ -183,6 +264,7 @@ export class OfficeState {
 
     // First pass: try to keep characters at their existing seats
     for (const ch of this.characters.values()) {
+      if (ch.isCat || ch.isLobster || ch.isSystemRole) continue
       if (ch.seatId && this.seats.has(ch.seatId)) {
         const seat = this.seats.get(ch.seatId)!
         if (!seat.assigned) {
@@ -203,6 +285,7 @@ export class OfficeState {
 
     // Second pass: assign remaining characters to free seats
     for (const ch of this.characters.values()) {
+      if (ch.isCat || ch.isLobster || ch.isSystemRole) continue
       if (ch.seatId) continue
       const seatId = this.findFreeSeat()
       if (seatId) {
@@ -219,6 +302,7 @@ export class OfficeState {
 
     // Relocate any characters that ended up outside bounds or on non-walkable tiles
     for (const ch of this.characters.values()) {
+      if (ch.isSystemRole) continue
       if (ch.seatId) continue // seated characters are fine
       if (ch.tileCol < 0 || ch.tileCol >= layout.cols || ch.tileRow < 0 || ch.tileRow >= layout.rows) {
         this.relocateCharacterToWalkable(ch)
@@ -469,9 +553,174 @@ export class OfficeState {
     this.characters.set(id, ch)
   }
 
+  ensureGatewaySre(): void {
+    const id = OfficeState.GATEWAY_SRE_ID
+    if (this.characters.has(id)) return
+    const spawn = this.findClosestWalkable(GATEWAY_SRE_STANDBY_COL, GATEWAY_SRE_STANDBY_ROW)
+    const ch = createCharacter(id, 2, null, null, 0)
+    ch.isSystemRole = true
+    ch.systemRoleType = 'gateway_sre'
+    ch.systemStatus = this.gatewaySreStatus
+    ch.label = GATEWAY_SRE_LABEL
+    ch.isActive = false
+    ch.state = CharacterState.IDLE
+    ch.seatId = null
+    ch.tileCol = spawn.col
+    ch.tileRow = spawn.row
+    ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2
+    ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2
+    ch.wanderTimer = 60
+    ch.matrixEffect = 'spawn'
+    ch.matrixEffectTimer = 0
+    ch.matrixEffectSeeds = matrixEffectSeeds()
+    this.characters.set(id, ch)
+  }
+
+  updateGatewaySreState(info: {
+    status: GatewaySreState
+    error?: string | null
+    responseMs?: number | null
+    checkedAt?: number | null
+  }): void {
+    const prevStatus = this.gatewaySreStatus
+    this.gatewaySreStatus = info.status
+    this.gatewaySreError = info.error ?? null
+    this.gatewaySreResponseMs = info.responseMs ?? null
+    this.gatewaySreCheckedAt = info.checkedAt ?? null
+    const ch = this.characters.get(OfficeState.GATEWAY_SRE_ID)
+    if (!ch) return
+    ch.systemStatus = this.gatewaySreStatus
+    if (prevStatus !== info.status) {
+      // React immediately when gateway status changes.
+      ch.wanderTimer = 0
+      if (info.status === 'down') {
+        ch.path = []
+        ch.moveProgress = 0
+      }
+    }
+  }
+
+  getGatewaySreInfo(): GatewaySreInfo | null {
+    const ch = this.characters.get(OfficeState.GATEWAY_SRE_ID)
+    if (!ch) return null
+    return {
+      id: ch.id,
+      status: this.gatewaySreStatus,
+      error: this.gatewaySreError,
+      responseMs: this.gatewaySreResponseMs,
+      checkedAt: this.gatewaySreCheckedAt,
+    }
+  }
+
+  private findClosestWalkable(targetCol: number, targetRow: number): { col: number; row: number } {
+    if (this.walkableTiles.length === 0) return { col: 1, row: 1 }
+    let best = this.walkableTiles[0]
+    let bestDist = Math.abs(best.col - targetCol) + Math.abs(best.row - targetRow)
+    for (let i = 1; i < this.walkableTiles.length; i++) {
+      const t = this.walkableTiles[i]
+      const d = Math.abs(t.col - targetCol) + Math.abs(t.row - targetRow)
+      if (d < bestDist) {
+        best = t
+        bestDist = d
+      }
+    }
+    return best
+  }
+
+  private getGatewaySrePatrolTiles(): Array<{ col: number; row: number }> {
+    // Mostly patrol in lounge (break area), occasionally stroll in office areas.
+    const loungeTiles = this.walkableTiles.filter((t) => t.row >= 9)
+    const officeTiles = this.walkableTiles.filter((t) =>
+      t.row <= 8 && t.col >= 1 && t.col <= 19
+    )
+    const lounge = loungeTiles.length > 0 ? loungeTiles : this.walkableTiles
+    if (officeTiles.length === 0) return lounge
+    // Weighted sampling pool: ~86% lounge, ~14% office.
+    return [...lounge, ...lounge, ...lounge, ...lounge, ...lounge, ...lounge, ...officeTiles]
+  }
+
+  private getGatewaySreRescuePoint(patrolTiles: Array<{ col: number; row: number }>): { col: number; row: number } {
+    for (const candidate of GATEWAY_SRE_RESCUE_CANDIDATES) {
+      if (patrolTiles.some((t) => t.col === candidate.col && t.row === candidate.row)) {
+        return { col: candidate.col, row: candidate.row }
+      }
+    }
+    return this.findClosestWalkable(2, 14)
+  }
+
+  private getGatewaySreDegradedTiles(
+    patrolTiles: Array<{ col: number; row: number }>,
+    rescuePoint: { col: number; row: number },
+  ): Array<{ col: number; row: number }> {
+    const nearby = patrolTiles.filter((t) =>
+      Math.abs(t.col - rescuePoint.col) + Math.abs(t.row - rescuePoint.row) <= 4
+    )
+    return nearby.length > 0 ? nearby : patrolTiles
+  }
+
+  private forceWalkTo(ch: Character, col: number, row: number): void {
+    const path = findPath(ch.tileCol, ch.tileRow, col, row, this.tileMap, this.blockedTiles)
+    if (path.length === 0) return
+    ch.path = path
+    ch.moveProgress = 0
+    ch.state = CharacterState.WALK
+    ch.frame = 0
+    ch.frameTimer = 0
+  }
+
+  private updateGatewaySreCharacter(ch: Character, dt: number): void {
+    ch.isActive = false
+    ch.seatId = null
+    ch.systemRoleType = 'gateway_sre'
+    ch.systemStatus = this.gatewaySreStatus
+    const patrolTiles = this.getGatewaySrePatrolTiles()
+    const rescuePoint = this.getGatewaySreRescuePoint(patrolTiles)
+    const degradedTiles = this.getGatewaySreDegradedTiles(patrolTiles, rescuePoint)
+
+    if (this.gatewaySreStatus === 'unknown') {
+      ch.moveSpeedMultiplier = 1
+      ch.path = []
+      ch.moveProgress = 0
+      ch.state = CharacterState.IDLE
+      ch.frame = 0
+      ch.frameTimer = 0
+      ch.wanderTimer = 5
+      return
+    }
+
+    if (this.gatewaySreStatus === 'down') {
+      ch.moveSpeedMultiplier = 2.2
+      const atRescue = ch.tileCol === rescuePoint.col && ch.tileRow === rescuePoint.row
+      const last = ch.path[ch.path.length - 1]
+      if (!atRescue && (!last || last.col !== rescuePoint.col || last.row !== rescuePoint.row)) {
+        this.withOwnSeatUnblocked(ch, () => this.forceWalkTo(ch, rescuePoint.col, rescuePoint.row))
+      }
+      this.withOwnSeatUnblocked(ch, () =>
+        updateCharacter(ch, dt, [rescuePoint], this.seats, this.tileMap, this.blockedTiles, [])
+      )
+      // Hold at server front and face the server.
+      if (ch.tileCol === rescuePoint.col && ch.tileRow === rescuePoint.row) {
+        ch.path = []
+        ch.moveProgress = 0
+        ch.state = CharacterState.IDLE
+        ch.frame = 0
+        ch.frameTimer = 0
+        ch.wanderTimer = 2
+        ch.dir = Direction.UP
+      }
+      return
+    }
+
+    ch.moveSpeedMultiplier = this.gatewaySreStatus === 'degraded' ? 1.4 : 0.9
+    const scope = this.gatewaySreStatus === 'degraded' ? degradedTiles : patrolTiles
+    this.withOwnSeatUnblocked(ch, () =>
+      updateCharacter(ch, dt, scope, this.seats, this.tileMap, this.blockedTiles, [])
+    )
+  }
+
   private getFirstIdleHumanoid(): Character | null {
     const list = Array.from(this.characters.values())
-      .filter(ch => !ch.isCat && !ch.isLobster && ch.state === CharacterState.IDLE && ch.matrixEffect !== 'despawn')
+      .filter(ch => !ch.isCat && !ch.isLobster && !ch.isSystemRole && ch.state === CharacterState.IDLE && ch.matrixEffect !== 'despawn')
       .sort((a, b) => a.id - b.id)
     return list[0] || null
   }
@@ -706,12 +955,13 @@ export class OfficeState {
       Math.abs(c - parentCol) + Math.abs(r - parentRow)
 
     let bestSeatId: string | null = null
-    for (const seatId of SUBAGENT_PRIORITY_SEAT_IDS) {
+    const availablePrioritySeats = SUBAGENT_PRIORITY_SEAT_IDS.filter((seatId) => {
       const seat = this.seats.get(seatId)
-      if (seat && !seat.assigned) {
-        bestSeatId = seatId
-        break
-      }
+      return !!seat && !seat.assigned
+    })
+    if (availablePrioritySeats.length > 0) {
+      const randomIdx = Math.floor(Math.random() * availablePrioritySeats.length)
+      bestSeatId = availablePrioritySeats[randomIdx]
     }
     if (!bestSeatId) {
       let bestDist = Infinity
@@ -986,6 +1236,7 @@ export class OfficeState {
   }
 
   update(dt: number): void {
+    this.ensureGatewaySre()
     this.bugSystem.update(dt, this.bugWorldWidth, this.bugWorldHeight)
     const toDelete: number[] = []
     const firstIdleHumanoid = this.getFirstIdleHumanoid()
@@ -1012,10 +1263,14 @@ export class OfficeState {
         continue
       }
 
-      // Temporarily unblock own seat so character can pathfind to it
-      this.withOwnSeatUnblocked(ch, () =>
-        updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.interactionPoints)
-      )
+      if (ch.systemRoleType === 'gateway_sre') {
+        this.updateGatewaySreCharacter(ch, dt)
+      } else {
+        // Temporarily unblock own seat so character can pathfind to it
+        this.withOwnSeatUnblocked(ch, () =>
+          updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles, this.interactionPoints)
+        )
+      }
 
       if (ch.isLobster) {
         if (ch.lobsterRageTimer > 0) {
@@ -1061,8 +1316,26 @@ export class OfficeState {
         ch.photoComments = []
       }
 
-      // Code snippet particles for working characters
-      if (ch.isActive && ch.state === CharacterState.TYPE && !ch.isCat && !ch.isLobster) {
+      const isSreFirefighting =
+        ch.systemRoleType === 'gateway_sre' &&
+        ch.systemStatus === 'down' &&
+        ch.state === CharacterState.IDLE
+
+      // Code snippet particles:
+      // - Working agents: regular coding snippets
+      // - Gateway SRE in down state: ops slang ("运维黑话")
+      if (isSreFirefighting && !ch.isCat && !ch.isLobster) {
+        for (const s of ch.codeSnippets) s.age += dt
+        ch.codeSnippets = ch.codeSnippets.filter(s => s.age < CODE_SNIPPET_LIFETIME)
+        if (ch.codeSnippets.length < 3 && Math.random() < dt * SRE_BLACKWORD_SPAWN_RATE) {
+          ch.codeSnippets.push({
+            text: SRE_BLACKWORDS[Math.floor(Math.random() * SRE_BLACKWORDS.length)],
+            age: 0,
+            x: (Math.random() - 0.5) * 14,
+            y: 0,
+          })
+        }
+      } else if (ch.isActive && ch.state === CharacterState.TYPE && !ch.isCat && !ch.isLobster) {
         // Age existing snippets and remove expired ones
         for (const s of ch.codeSnippets) s.age += dt
         ch.codeSnippets = ch.codeSnippets.filter(s => s.age < CODE_SNIPPET_LIFETIME)
