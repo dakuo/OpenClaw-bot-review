@@ -260,13 +260,15 @@ function SessionList({ agentId }: { agentId: string }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <button
-            onClick={testAllSessions}
-            disabled={testingAll}
-            className="w-full sm:w-auto px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
-          >
-            {testingAll ? t("sessions.testingAll") : t("sessions.testAll")}
-          </button>
+          {gateway.webUrl && (
+            <button
+              onClick={testAllSessions}
+              disabled={testingAll}
+              className="w-full sm:w-auto px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
+            >
+              {testingAll ? t("sessions.testingAll") : t("sessions.testAll")}
+            </button>
+          )}
           <Link
             href="/sessions"
             className="w-full sm:w-auto px-4 py-2 rounded-lg bg-[var(--card)] border border-[var(--border)] text-sm hover:border-[var(--accent)] transition text-center"
@@ -306,13 +308,15 @@ function SessionList({ agentId }: { agentId: string }) {
                   )}
                 </div>
                 <div className="flex items-center gap-2 md:self-auto self-start">
-                  <button
-                    onClick={(e) => testSession(s.key, e)}
-                    disabled={testResults[s.key]?.status === "testing"}
-                    className="px-3 py-1 rounded-lg text-xs font-medium border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition disabled:opacity-50"
-                  >
-                    {testResults[s.key]?.status === "testing" ? t("sessions.testing") : t("sessions.test")}
-                  </button>
+                  {gateway.webUrl && (
+                    <button
+                      onClick={(e) => testSession(s.key, e)}
+                      disabled={testResults[s.key]?.status === "testing"}
+                      className="px-3 py-1 rounded-lg text-xs font-medium border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition disabled:opacity-50"
+                    >
+                      {testResults[s.key]?.status === "testing" ? t("sessions.testing") : t("sessions.test")}
+                    </button>
+                  )}
                   <span className="text-xs text-[var(--text-muted)]">{formatTimeAgo(s.updatedAt)}</span>
                 </div>
               </div>
