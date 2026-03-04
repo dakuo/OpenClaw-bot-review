@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { isGatewayRunning } from "../utils/gateway";
 
 const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 
@@ -94,6 +95,11 @@ function getAgentState(agentId: string): AgentStatus {
     } else if (diff < 24 * 60 * 60 * 1000) {
       state = "idle";
     }
+  }
+
+  // If gateway is not running, downgrade "working" or "online" to "idle"
+  if ((state === "working" || state === "online") && !isGatewayRunning()) {
+    state = "idle";
   }
 
   return { agentId, state, lastActive };

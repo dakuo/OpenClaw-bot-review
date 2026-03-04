@@ -1,23 +1,10 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { isGatewayRunning } from "../utils/gateway";
 
 const NANOBOT_HOME = process.env.NANOBOT_HOME || path.join(process.env.HOME || "", ".nanobot");
 const CONFIG_PATH = path.join(NANOBOT_HOME, "config.json");
-
-function isGatewayRunning(): boolean {
-  const { execSync } = require("child_process");
-  try {
-    const output = execSync("pgrep -f 'nanobot gateway' 2>/dev/null || pgrep -f 'nanobot/cli.*gateway' 2>/dev/null", {
-      encoding: "utf-8",
-      timeout: 3000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    return output.length > 0;
-  } catch {
-    return false;
-  }
-}
 
 export async function GET() {
   try {
